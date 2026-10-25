@@ -69,14 +69,10 @@ PHONE_MODELS = ("Pixel 8", "Pixel 7", "SM-S911B", "OnePlus 11", "Redmi Note 12")
 REGIONS = ("us-pr", "eu-pr")
 
 PARAM_PRIVACY_MODE = 99904
-# 6250 is the privacy param the camera itself reacts to; 1035 is camera power
-# (NOT privacy) and must never be written for a privacy toggle.
+# 6250 is the privacy param the camera itself reacts to and reports; 99904 is only
+# written by us and can be stale.
 PARAM_PRIVACY_6250 = 6250
-# Camera power (CameraActions.on/off in eufy-sdk). Disable bit by default (on = 0);
-# enable bit (on = 1) for the floodlight cams below.
-PARAM_CAMERA_POWER = 1035
 PARAM_NIGHT_VISION = 1277
-ENABLE_BIT_MODELS = ("T8422", "T8424")
 KEY_TTL = 12 * 3600
 
 CODE_OK = 0
@@ -167,25 +163,12 @@ class EufyTwoFactorRequired(EufyError):
 
 
 def privacy_enabled(device: dict[str, Any]) -> bool:
-    """Read the privacy-mode param (99904, else 6250) from a device record."""
+    """Read the privacy-mode param (6250, else 99904) from a device record."""
     values = {str(p.get("param_type")): str(p.get("param_value")) for p in device.get("params") or []}
-    for key in (PARAM_PRIVACY_MODE, PARAM_PRIVACY_6250):
+    for key in (PARAM_PRIVACY_6250, PARAM_PRIVACY_MODE):
         if str(key) in values:
             return values[str(key)] in ("1", "True", "true")
     return False
-
-
-def _power_enable_bit(device: dict[str, Any]) -> bool:
-    return str(device.get("device_model") or "").upper().startswith(ENABLE_BIT_MODELS)
-
-
-def camera_power_on(device: dict[str, Any]) -> bool | None:
-    """Camera power from param 1035 (None when the device does not report it)."""
-    for param in device.get("params") or []:
-        if str(param.get("param_type")) == str(PARAM_CAMERA_POWER):
-            raw = str(param.get("param_value")) in ("1", "True", "true")
-            return raw if _power_enable_bit(device) else not raw
-    return None
 
 
 def _looks_like_html(text: str) -> bool:
@@ -740,22 +723,6 @@ class EufyApi:
             },
         )
         self._vlog("set_privacy %s result=%s", device.get("device_sn"), _fmt(res))
-
-    async def set_camera_power(self, device: dict[str, Any], on: bool) -> None:
-        """Power the camera on/off (param 1035, polarity per model)."""
-        raw = on if _power_enable_bit(device) else not on
-        self._vlog("set_camera_power %s -> on=%s raw=%s", device.get("device_sn"), on, int(raw))
-        res = await self._authed(
-            "security",
-            "/v1/app/upload_devs_params",
-            {
-                "device_sn": device["device_sn"],
-                "station_sn": device.get("station_sn", device["device_sn"]),
-                "params": [{"param_type": PARAM_CAMERA_POWER, "param_value": "1" if raw else "0"}],
-                "transaction": str(int(time.time() * 1000)),
-            },
-        )
-        self._vlog("set_camera_power %s result=%s", device.get("device_sn"), _fmt(res))
 
     async def set_night_vision(self, device: dict[str, Any], mode: int) -> None:
         """Set night vision type (param 1277: 0 off, 1 auto, 3 on)."""

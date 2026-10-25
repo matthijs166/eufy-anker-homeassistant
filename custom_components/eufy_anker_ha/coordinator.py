@@ -9,7 +9,7 @@ import time
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import EufyApi, redact, EufyError, PARAM_NIGHT_VISION, camera_power_on, privacy_enabled
+from .api import EufyApi, redact, EufyError, PARAM_NIGHT_VISION, privacy_enabled
 from .const import DEFAULT_SCAN_INTERVAL, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -28,7 +28,6 @@ class EufyCoordinator(DataUpdateCoordinator[dict]):
         self.cameras = cameras
         self.log_properties = False
         self._pending_privacy: dict[str, tuple[bool, float]] = {}
-        self._pending_power: dict[str, tuple[bool, float]] = {}
         self._pending_night_vision: dict[str, tuple[str, float]] = {}
 
     def vlog(self, msg: str, *args) -> None:
@@ -46,19 +45,6 @@ class EufyCoordinator(DataUpdateCoordinator[dict]):
             raise
         self._pending_privacy[sn] = (enabled, time.time() + PENDING_TTL)
         self.data[sn]["privacy"] = enabled
-        self.async_update_listeners()
-        await self.async_request_refresh()
-
-    async def async_set_power(self, sn: str, on: bool) -> None:
-        """Write camera power to the cloud, show it optimistically and verify on refresh."""
-        self.vlog("ACTION camera power %s -> %s (was %s)", sn, on, self.data[sn]["power"])
-        try:
-            await self.api.set_camera_power(self.data[sn]["device"], on)
-        except EufyError as err:
-            _LOGGER.error("Setting camera power for %s failed: %s", sn, err)
-            raise
-        self._pending_power[sn] = (on, time.time() + PENDING_TTL)
-        self.data[sn]["power"] = on
         self.async_update_listeners()
         await self.async_request_refresh()
 
@@ -103,16 +89,6 @@ class EufyCoordinator(DataUpdateCoordinator[dict]):
                         "the camera did not pick it up", sn, privacy,
                     )
                     del self._pending_privacy[sn]
-            power = camera_power_on(dev)
-            pend = self._pending_power.get(sn)
-            if pend:
-                if power == pend[0] or time.time() >= pend[1]:
-                    if power != pend[0]:
-                        _LOGGER.warning("Camera power of %s was written but the cloud still reports %s", sn, power)
-                    del self._pending_power[sn]
-                else:
-                    self.vlog("power %s cloud still reports %s, keeping requested %s", sn, power, pend[0])
-                    power = pend[0]
             night_vision = next(
                 (str(param.get("param_value")) for param in dev.get("params") or []
                  if str(param.get("param_type")) == str(PARAM_NIGHT_VISION)),
@@ -126,7 +102,6 @@ class EufyCoordinator(DataUpdateCoordinator[dict]):
                 else:
                     night_vision = wanted
             data[sn] = {
-                "power": power,
                 "night_vision": night_vision,
                 "device": dev,
                 "image_url": (last or {}).get("pic_url") or dev.get("cover_path"),

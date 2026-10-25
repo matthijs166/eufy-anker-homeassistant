@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 import logging
@@ -43,6 +44,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = EufyCoordinator(hass, api, cameras, interval)
     coordinator.log_properties = entry.options.get(CONF_LOG_PROPERTIES, False)
     await coordinator.async_config_entry_first_refresh()
+    registry = er.async_get(hass)
+    for ent in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if ent.unique_id.endswith("_power"):
+            registry.async_remove(ent.entity_id)
     coordinator.vlog("first refresh done, forwarding platforms %s", PLATFORMS)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     entry.async_on_unload(entry.add_update_listener(_reload))
