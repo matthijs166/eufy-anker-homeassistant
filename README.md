@@ -37,4 +37,4 @@ Tip: create a second Eufy account, share your cameras with it, and use that acco
 
 ## Credits
 
-Inspired by [mega-yfue/eufy-sdk](https://github.com/mega-yfue/eufy-sdk). Not affiliated with Anker or Eufy.
+The login flow and the signed/encrypted `algo_ecdh` transport (region discovery, ECDH key exchange, encrypted passport login, captcha and 2FA) are a Python port of the work in **[mega-yfue/eufy-sdk](https://github.com/mega-yfue/eufy-sdk)** — big thanks to its authors. Not affiliated with Anker or Eufy.

@@ -8,7 +8,7 @@ import time
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import EufyApi, EufyError
+from .api import EufyApi, EufyError, privacy_enabled
 from .const import DEFAULT_SCAN_INTERVAL, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -39,7 +39,7 @@ class EufyCoordinator(DataUpdateCoordinator[dict]):
                 "device": dev,
                 "image_url": (last or {}).get("pic_url") or dev.get("cover_path"),
                 "last_event": (last or {}).get("create_time", 0),
-                "privacy": str(dev.get("params_privacy", dev.get("privacy_mode", "0"))) in ("1", "True", "true"),
+                "privacy": privacy_enabled(dev),
                 "now": int(time.time()),
             }
         return data
