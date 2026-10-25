@@ -9,7 +9,7 @@ import time
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import EufyApi, redact, EufyError, camera_power_on, privacy_enabled
+from .api import EufyApi, redact, EufyError, PARAM_NIGHT_VISION, camera_power_on, privacy_enabled
 from .const import DEFAULT_SCAN_INTERVAL, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -29,6 +29,7 @@ class EufyCoordinator(DataUpdateCoordinator[dict]):
         self.log_properties = False
         self._pending_privacy: dict[str, tuple[bool, float]] = {}
         self._pending_power: dict[str, tuple[bool, float]] = {}
+        self._pending_night_vision: dict[str, tuple[str, float]] = {}
 
     def vlog(self, msg: str, *args) -> None:
         if self.api.verbose:
@@ -58,6 +59,16 @@ class EufyCoordinator(DataUpdateCoordinator[dict]):
             raise
         self._pending_power[sn] = (on, time.time() + PENDING_TTL)
         self.data[sn]["power"] = on
+        self.async_update_listeners()
+        await self.async_request_refresh()
+
+    async def async_set_night_vision(self, sn: str, mode: int) -> None:
+        """Write night vision to the cloud and show it optimistically until refreshed."""
+        device = self.data[sn]["device"]
+        await self.api.set_night_vision(device, mode)
+        value = str(mode)
+        self._pending_night_vision[sn] = (value, time.time() + PENDING_TTL)
+        self.data[sn]["night_vision"] = value
         self.async_update_listeners()
         await self.async_request_refresh()
 
@@ -102,8 +113,21 @@ class EufyCoordinator(DataUpdateCoordinator[dict]):
                 else:
                     self.vlog("power %s cloud still reports %s, keeping requested %s", sn, power, pend[0])
                     power = pend[0]
+            night_vision = next(
+                (str(param.get("param_value")) for param in dev.get("params") or []
+                 if str(param.get("param_type")) == str(PARAM_NIGHT_VISION)),
+                None,
+            )
+            pending_night_vision = self._pending_night_vision.get(sn)
+            if pending_night_vision:
+                wanted, expires = pending_night_vision
+                if night_vision == wanted or time.time() >= expires:
+                    del self._pending_night_vision[sn]
+                else:
+                    night_vision = wanted
             data[sn] = {
                 "power": power,
+                "night_vision": night_vision,
                 "device": dev,
                 "image_url": (last or {}).get("pic_url") or dev.get("cover_path"),
                 "last_event": (last or {}).get("create_time", 0),

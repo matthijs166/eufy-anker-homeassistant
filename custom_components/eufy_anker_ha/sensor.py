@@ -9,8 +9,6 @@ from .entity import EufyEntity
 
 PARAM_WIFI_RSSI = 1142
 PARAM_WIFI_NAME = 6200
-PARAM_NIGHT_VISION = 1277
-NIGHT_VISION_STATES = {"0": "off", "1": "auto", "3": "on"}
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -21,7 +19,6 @@ async def async_setup_entry(hass, entry, async_add_entities):
         for entity in (
             EufyWifiRssi(coordinator, sn),
             EufyWifiName(coordinator, sn),
-            EufyNightVision(coordinator, sn),
         )
     ]
     coordinator.vlog("sensor platform: adding %d entities", len(entities))
@@ -56,23 +53,6 @@ class EufyWifiRssi(EufyEntity, SensorEntity):
         except (TypeError, ValueError):
             return None
         return int(numeric_value) if numeric_value.is_integer() else numeric_value
-
-
-class EufyNightVision(EufyEntity, SensorEntity):
-    """Night vision mode (off / auto / on)."""
-
-    _attr_name = "Night vision"
-    _attr_device_class = SensorDeviceClass.ENUM
-    _attr_options = list(NIGHT_VISION_STATES.values())
-
-    def __init__(self, coordinator, sn) -> None:
-        super().__init__(coordinator, sn)
-        self._attr_unique_id = f"{sn}_night_vision"
-
-    @property
-    def native_value(self) -> str | None:
-        value = _param_value(self.info["device"], PARAM_NIGHT_VISION)
-        return NIGHT_VISION_STATES.get(str(value))
 
 
 class EufyWifiName(EufyEntity, SensorEntity):

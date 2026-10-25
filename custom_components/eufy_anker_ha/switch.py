@@ -10,7 +10,6 @@ from .entity import EufyEntity
 async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = hass.data[DOMAIN][entry.entry_id]
     entities = [EufyPrivacy(coordinator, sn) for sn in coordinator.data]
-    entities += [EufyPower(coordinator, sn) for sn, d in coordinator.data.items() if d["power"] is not None]
     coordinator.vlog("switch platform: adding %d entities", len(entities))
     async_add_entities(entities)
 
@@ -37,27 +36,3 @@ class EufyPrivacy(EufyEntity, SwitchEntity):
     async def async_turn_off(self, **kwargs) -> None:
         self.coordinator.vlog("TRIGGER switch privacy turn_off %s kwargs=%s", self.sn, kwargs)
         await self.coordinator.async_set_privacy(self.sn, False)
-
-
-class EufyPower(EufyEntity, SwitchEntity):
-    """Camera power on/off."""
-
-    _attr_name = "Camera power"
-    _attr_icon = "mdi:power"
-
-    def __init__(self, coordinator, sn) -> None:
-        super().__init__(coordinator, sn)
-        self._attr_unique_id = f"{sn}_power"
-
-    @property
-    def is_on(self) -> bool:
-        self.coordinator.vlog("STATE power %s -> %s", self.sn, self.info["power"])
-        return bool(self.info["power"])
-
-    async def async_turn_on(self, **kwargs) -> None:
-        self.coordinator.vlog("TRIGGER switch power turn_on %s kwargs=%s", self.sn, kwargs)
-        await self.coordinator.async_set_power(self.sn, True)
-
-    async def async_turn_off(self, **kwargs) -> None:
-        self.coordinator.vlog("TRIGGER switch power turn_off %s kwargs=%s", self.sn, kwargs)
-        await self.coordinator.async_set_power(self.sn, False)
