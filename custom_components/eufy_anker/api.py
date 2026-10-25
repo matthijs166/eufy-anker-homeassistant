@@ -7,14 +7,18 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
+import logging
 import time
 import uuid
 from typing import Any
 
-from aiohttp import ClientSession
+from aiohttp import ClientError, ClientSession
 from cryptography.hazmat.primitives import hashes, padding, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+_LOGGER = logging.getLogger(__name__)
 
 API_BASE = "https://security-app.eufylife.com"
 PARAM_PRIVACY_MODE = 99904
@@ -27,6 +31,10 @@ CODE_BAD_PASSWORD = 26006
 
 class EufyError(Exception):
     """Base error."""
+
+
+class EufyConnectionError(EufyError):
+    """Could not reach the Eufy cloud or got an unparseable response."""
 
 
 class EufyAuthError(EufyError):
@@ -55,7 +63,9 @@ class EufyApi:
         email: str,
         password: str,
         auth: dict[str, Any] | None = None,
+        debug: bool = False,
     ) -> None:
+        self.debug = debug
         self._session = session
         self._email = email
         self._password = password
@@ -108,10 +118,29 @@ class EufyApi:
         ).hex()
 
     async def _post(self, path: str, body: dict[str, Any], base: str | None = None) -> dict:
-        async with self._session.post(
-            f"{base or self._base}{path}", json=body, headers=self._headers()
-        ) as resp:
-            return await resp.json(content_type=None)
+        url = f"{base or self._base}{path}"
+        level = logging.WARNING if self.debug else logging.DEBUG
+        if _LOGGER.isEnabledFor(level):
+            safe = {k: ("***" if k in ("password", "client_secret_info") else v) for k, v in body.items()}
+            _LOGGER.log(level, "POST %s body=%s", url, safe)
+        try:
+            async with self._session.post(url, json=body, headers=self._headers()) as resp:
+                text = await resp.text()
+                _LOGGER.log(level, "POST %s -> HTTP %s: %s", url, resp.status, text[:2000])
+                try:
+                    return json.loads(text)
+                except ValueError as err:
+                    raise EufyConnectionError(
+                        f"{url} returned HTTP {resp.status} with a non-JSON response "
+                        f"({err}): {text[:300]!r}"
+                    ) from err
+        except EufyConnectionError:
+            raise
+        except (ClientError, TimeoutError) as err:
+            _LOGGER.log(level, "POST %s failed", url, exc_info=True)
+            raise EufyConnectionError(
+                f"Request to {url} failed: {type(err).__name__}: {err or 'no details'}"
+            ) from err
 
     async def login(
         self,
@@ -137,7 +166,10 @@ class EufyApi:
             (probe.get("data") or {}).get("server_secret_info", {}).get("public_key")
         )
         if not server_pub:
-            raise EufyError(f"Unexpected login response: {probe.get('msg')}")
+            raise EufyError(
+                f"Unexpected login response (code={probe.get('code')}, msg={probe.get('msg')!r}); "
+                "the server did not return a public key"
+            )
         body: dict[str, Any] = {
             "ab": "US",
             "client_secret_info": {"public_key": self._public_hex()},
@@ -167,7 +199,7 @@ class EufyApi:
         if code == CODE_BAD_PASSWORD:
             raise EufyAuthError(result.get("msg", "invalid credentials"))
         if code != CODE_OK:
-            raise EufyAuthError(result.get("msg", f"login failed ({code})"))
+            raise EufyAuthError(f"login failed (code={code}, msg={result.get('msg')!r})")
         domain = data.get("domain")
         self._auth.update(
             token=data["auth_token"],
@@ -183,7 +215,7 @@ class EufyApi:
             await self.login()
             result = await self._post(path, body)
         if result.get("code") != CODE_OK:
-            raise EufyError(result.get("msg", "request failed"))
+            raise EufyError(f"{path} failed (code={result.get('code')}, msg={result.get('msg')!r})")
         return result.get("data")
 
     async def get_cameras(self) -> list[dict[str, Any]]:
