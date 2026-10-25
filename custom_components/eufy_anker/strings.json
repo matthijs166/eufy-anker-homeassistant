@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {"title": "Eufy login", "description": "Log in with your Eufy / Anker account. Tip: use a secondary account shared with your cameras.", "data": {"email": "Email", "password": "Password"}},
+      "captcha": {"title": "Captcha", "description": "{image}\n\nEnter the characters shown.", "data": {"captcha": "Captcha"}},
+      "2fa": {"title": "Two-factor authentication", "description": "Enter the verification code Eufy sent you.", "data": {"code": "Verification code"}},
+      "cameras": {"title": "Select cameras", "description": "All cameras found on your account are listed.", "data": {"cameras": "Cameras"}}
+    },
+    "error": {"invalid_auth": "Invalid credentials or code", "cannot_connect": "Could not connect to Eufy"},
+    "abort": {"already_configured": "Account already configured"}
+  },
+  "options": {"step": {"init": {"title": "Select cameras", "data": {"cameras": "Cameras"}}}}
+}
