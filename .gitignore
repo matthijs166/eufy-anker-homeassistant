@@ -1,1 +1,6 @@
 __pycache__/
+.env
+.pytest_cache/
+.venv
+login_cache.json
+device_cache.json

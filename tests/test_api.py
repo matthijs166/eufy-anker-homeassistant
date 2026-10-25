@@ -117,6 +117,17 @@ def _make(cloud, monkeypatch):
     return api
 
 
+def test_retry_after_seconds_reads_duration_from_server_message():
+    assert api_mod._retry_after_seconds({}, "Please try again in 2 minutes") == 120
+    assert api_mod._retry_after_seconds({}, "retry after 30 seconds") == 30
+    assert api_mod._retry_after_seconds({}, "wait 1 hour") == 3600
+
+
+def test_retry_after_seconds_prefers_header_and_handles_unknown_duration():
+    assert api_mod._retry_after_seconds({"retry-after": "90"}, "retry in 2 minutes") == 90
+    assert api_mod._retry_after_seconds({}, "Too many login attempts") is None
+
+
 @pytest.mark.asyncio
 async def test_plain_login_and_devices(monkeypatch):
     cloud = FakeCloud()
@@ -148,3 +159,28 @@ async def test_two_factor_flow(monkeypatch):
         await api.login()
     await api.login(verify_code="999")
     assert api.auth["token"] == "tok"
+
+
+@pytest.mark.asyncio
+async def test_set_privacy_uses_fresh_6250_param_when_device_list_omits_it(monkeypatch):
+    api = api_mod.EufyApi(None, "me@example.com", "s3cret")
+    submitted = []
+
+    async def get_device_params(device_sn):
+        assert device_sn == "T1"
+        return [{"param_type": 6250, "param_value": "0"}]
+
+    async def authed(host_kind, path, body, service=""):
+        submitted.append(body)
+        return {"result": "ok"}
+
+    monkeypatch.setattr(api, "get_device_params", get_device_params)
+    monkeypatch.setattr(api, "_authed", authed)
+
+    await api.set_privacy(
+        {"device_sn": "T1", "params": [{"param_type": 99904, "param_value": "0"}]},
+        True,
+    )
+
+    assert [param["param_type"] for param in submitted[0]["params"]] == [99904, 6250]
+    assert all(param["param_value"] == "1" for param in submitted[0]["params"])

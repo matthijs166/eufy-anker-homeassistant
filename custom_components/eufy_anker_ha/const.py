@@ -1,7 +1,7 @@
 """Constants for the Eufy Anker integration."""
 
 DOMAIN = "eufy_anker_ha"
-PLATFORMS = ["camera", "binary_sensor", "switch", "button"]
+PLATFORMS = ["camera", "binary_sensor", "switch", "button", "sensor"]
 
 CONF_EMAIL = "email"
 CONF_PASSWORD = "password"

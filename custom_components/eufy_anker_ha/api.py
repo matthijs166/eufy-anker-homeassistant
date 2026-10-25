@@ -85,6 +85,7 @@ CODE_BAD_PASSWORD = 26006
 CODE_SESSION_KICKED = 26084
 CODE_CAPTCHA_REQUIRED = 100032
 CODE_CAPTCHA_WRONG = 100033
+CODE_LOGIN_LIMIT = 100028
 
 
 class EufyError(Exception):
@@ -106,6 +107,48 @@ class EufyApiError(EufyError):
         super().__init__(message)
         self.code = code
         self.status = status
+
+
+class EufyRateLimited(EufyApiError):
+    """Too many logins; retry_after is seconds to wait, if the server said."""
+
+    def __init__(self, message: str, retry_after: int | None = None, code: int | None = None, status: int | None = None) -> None:
+        super().__init__(message, code, status)
+        self.retry_after = retry_after
+
+
+def _retry_after_seconds(headers: dict[str, str], message: str = "") -> int | None:
+    """Seconds to wait from rate-limit headers or an explicit server message."""
+    for name in ("retry-after", "x-ratelimit-reset", "x-rate-limit-reset", "ratelimit-reset"):
+        value = headers.get(name)
+        if not value:
+            continue
+        try:
+            seconds = int(float(value))
+        except ValueError:
+            try:
+                from email.utils import parsedate_to_datetime
+
+                seconds = int(parsedate_to_datetime(value).timestamp() - time.time())
+            except (TypeError, ValueError):
+                continue
+        # large values are epoch timestamps
+        if seconds > 10**9:
+            seconds -= int(time.time())
+        return max(seconds, 0)
+
+    match = re.search(
+        r"\b(?:retry|try again|wait|blocked|locked)(?:\s+(?:again|after|in|for))?\s*[:=]?\s*"
+        r"(\d+(?:\.\d+)?)\s*(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h)\b",
+        message,
+        re.IGNORECASE,
+    )
+    if match:
+        amount = float(match.group(1))
+        unit = match.group(2).lower()
+        multiplier = 3600 if unit.startswith(("hour", "hr", "h")) else 60 if unit.startswith(("minute", "min", "m")) else 1
+        return max(int(amount * multiplier), 0)
+    return None
 
 
 class EufyCaptchaRequired(EufyError):
@@ -197,6 +240,7 @@ class EufyApi:
             }
         self._host_keys: dict[str, dict[str, Any]] = {}
         self._content_types: dict[str, str] = {}
+        self._last_headers: dict[str, str] = {}
         self._captcha_id = ""
         self._pending_2fa = False
 
@@ -252,6 +296,8 @@ class EufyApi:
         try:
             async with self._session.post(url, data=body.encode(), headers=headers, timeout=20) as resp:
                 text = await resp.text()
+                self._last_headers = {k.lower(): v for k, v in resp.headers.items()}
+                self._vlog("HTTP response headers: %s", _fmt(self._last_headers, 1500))
                 self._vlog("HTTP POST %s -> HTTP %s: %s", url, resp.status, _fmt(text, 1500))
                 try:
                     return resp.status, json.loads(text) if text else {}
@@ -388,6 +434,21 @@ class EufyApi:
                 self._key = None
             return await self._post_signed(host, path, body, authed, True)
         self._vlog("RESPONSE %s%s FAILED HTTP %s code=%s msg=%s", host, path, status, code, msg)
+        if code == CODE_LOGIN_LIMIT or status == 429:
+            retry_after = _retry_after_seconds(self._last_headers, msg)
+            _LOGGER.warning(
+                "Eufy rate limit on %s (HTTP %s/%s), retry_after=%s, headers=%s",
+                path, status, code, retry_after, self._last_headers,
+            )
+            wait = (
+                f"retry in about {-(-retry_after // 60)} min"
+                if retry_after is not None
+                else "Eufy did not provide a retry time; wait before trying again"
+            )
+            raise EufyRateLimited(
+                f"{path} rate limited (HTTP {status}/{code}): {msg}; {wait}",
+                retry_after, code, status,
+            )
         raise EufyApiError(f"{path} failed (HTTP {status}/{code}): {msg}", code, status)
 
     def _mega_host(self, service: str) -> str:
@@ -554,6 +615,9 @@ class EufyApi:
     async def set_privacy(self, device: dict[str, Any], enabled: bool) -> None:
         """Turn privacy mode on or off (writes 99904, plus 6250 when the device has it)."""
         present = {str(p.get("param_type")) for p in device.get("params") or []}
+        if str(PARAM_PRIVACY_6250) not in present:
+            fresh_params = await self.get_device_params(device["device_sn"])
+            present.update(str(p.get("param_type")) for p in fresh_params or [])
         types = [PARAM_PRIVACY_MODE] + ([PARAM_PRIVACY_6250] if str(PARAM_PRIVACY_6250) in present else [])
         value = "1" if enabled else "0"
         self._vlog("set_privacy %s -> %s params=%s", device.get("device_sn"), value, types)

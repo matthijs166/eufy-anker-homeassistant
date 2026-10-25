@@ -8,7 +8,7 @@ A HACS custom integration that connects your Eufy (Anker) cameras to Home Assist
 
 > 💡 **Missing a feature?** [Create an issue](https://github.com/matthijs166/eufy-anker-homeassistant/issues) and I will build it.
 
-## What it does (camera support only, for now)
+## What it does
 
 For every camera you pick, the integration creates:
 
@@ -18,6 +18,8 @@ For every camera you pick, the integration creates:
 | `binary_sensor` (Detection) | Turns on for 60 s after a detection event — use it as an **automation trigger** |
 | `switch` (Privacy mode) | **Enable / disable privacy mode** |
 | `switch` (Camera power) | **Turn the camera on / off** |
+| `sensor` (Wi-Fi signal strength) | Reports the camera's Wi-Fi RSSI in dBm |
+| `sensor` (Wi-Fi name) | Reports the connected Wi-Fi network name |
 
 Data is polled from the Eufy cloud (interval configurable).
 
