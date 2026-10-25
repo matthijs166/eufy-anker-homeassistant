@@ -1,5 +1,5 @@
 {
-  "domain": "eufy",
+  "domain": "eufy_anker_ha",
   "name": "Eufy Anker Cameras",
   "codeowners": ["@matthijs166"],
   "config_flow": true,

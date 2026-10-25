@@ -17,14 +17,15 @@ For every camera you pick, the integration creates:
 | `camera` | Shows the **last image** of the camera |
 | `binary_sensor` (Detection) | Turns on for 60 s after a detection event — use it as an **automation trigger** |
 | `switch` (Privacy mode) | **Enable / disable privacy mode** |
+| `switch` (Camera power) | **Turn the camera on / off** |
 
-Data is polled from the Eufy cloud every 30 seconds.
+Data is polled from the Eufy cloud (interval configurable).
 
 ## Install
 
 1. Click the button above (or in HACS: *Custom repositories* → add this repo as type *Integration*).
 2. Download **Eufy Anker Cameras** in HACS and restart Home Assistant.
-3. Add the integration: [![Add integration](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=eufy)
+3. Add the integration: [![Add integration](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=eufy_anker_ha)
 
 ## Setup
 
@@ -38,3 +39,9 @@ Tip: create a second Eufy account, share your cameras with it, and use that acco
 ## Credits
 
 The login flow and the signed/encrypted `algo_ecdh` transport (region discovery, ECDH key exchange, encrypted passport login, captcha and 2FA) are a Python port of the work in **[mega-yfue/eufy-sdk](https://github.com/mega-yfue/eufy-sdk)** — big thanks to its authors. Not affiliated with Anker or Eufy.
+
+## Settings
+
+Under **Configure** on the integration you can choose the cameras, turn on **verbose logging** (writes all actions, syncs and requests to the Home Assistant log) and set the **cloud update interval** (default 30 s). An optional setting logs all device properties on every sync, and a diagnostics download is available on the device page.
+
+> This integration uses the domain `eufy_anker_ha`. If you used an older version, remove the old `custom_components/eufy` folder and add the integration again.
