@@ -1,0 +1,12 @@
+{
+  "domain": "eufy_anker",
+  "name": "Eufy Anker Cameras",
+  "codeowners": ["@matthijs166"],
+  "config_flow": true,
+  "documentation": "https://github.com/matthijs166/eufy-anker-homeassistant",
+  "issue_tracker": "https://github.com/matthijs166/eufy-anker-homeassistant/issues",
+  "integration_type": "hub",
+  "iot_class": "cloud_polling",
+  "requirements": ["cryptography>=42.0.0"],
+  "version": "0.1.0"
+}
