@@ -195,47 +195,93 @@ def decode_audio_frame(payload: bytes) -> tuple[str, bytes, bytes | None] | None
     return codec, payload[AUDIO_HEADER_LEN:], config
 
 
-def wrap_aac_eld_latm(data: bytes, config: bytes, include_config: bool) -> bytes:
-    """Wrap one raw AAC-ELD access unit in a LOAS/LATM frame for FFmpeg."""
-    if not data or not config:
-        raise ValueError("AAC-ELD access unit and AudioSpecificConfig must not be empty")
+def aac_eld_fmp4_init(config: bytes) -> bytes:
+    """Build an audio-only fragmented-MP4 init segment for AAC-ELD."""
+    if not config:
+        raise ValueError("AAC-ELD AudioSpecificConfig must not be empty")
 
-    bits: list[int] = []
+    mvhd = bytearray(100)
+    mvhd[12:16] = (16000).to_bytes(4, "big")
+    mvhd[20:24] = (0x00010000).to_bytes(4, "big")
+    mvhd[24:26] = (0x0100).to_bytes(2, "big")
+    _mp4_matrix(mvhd, 32)
+    mvhd[96:100] = (2).to_bytes(4, "big")
 
-    def write_bits(value: int, count: int) -> None:
-        bits.extend((value >> shift) & 1 for shift in range(count - 1, -1, -1))
+    tkhd = bytearray(84)
+    tkhd[0:4] = (7).to_bytes(4, "big")
+    tkhd[12:16] = (1).to_bytes(4, "big")
+    tkhd[36:38] = (0x0100).to_bytes(2, "big")
+    _mp4_matrix(tkhd, 40)
 
-    write_bits(0 if include_config else 1, 1)
-    if include_config:
-        write_bits(0, 1)  # audioMuxVersion
-        write_bits(1, 1)  # allStreamsSameTimeFraming
-        write_bits(0, 6)  # numSubFrames
-        write_bits(0, 4)  # numProgram
-        write_bits(0, 3)  # numLayer
-        for byte in config:
-            write_bits(byte, 8)
-        write_bits(0, 3)  # frameLengthType
-        write_bits(0xFF, 8)  # latmBufferFullness
-        write_bits(0, 1)  # otherDataPresent
-        write_bits(0, 1)  # crcCheckPresent
+    mdhd = bytearray(32)
+    mdhd[12:16] = (16000).to_bytes(4, "big")
+    mdhd[24:26] = (0x55C4).to_bytes(2, "big")
+    hdlr = _mp4_box("hdlr", bytes(8) + b"soun" + bytes(12) + b"SoundHandler\0")
 
-    remaining = len(data)
-    while remaining >= 255:
-        write_bits(255, 8)
-        remaining -= 255
-    write_bits(remaining, 8)
-    for byte in data:
-        write_bits(byte, 8)
-    while len(bits) % 8:
-        bits.append(0)
+    audio_entry = bytearray(28)
+    audio_entry[6:8] = (1).to_bytes(2, "big")
+    audio_entry[16:18] = (1).to_bytes(2, "big")
+    audio_entry[18:20] = (16).to_bytes(2, "big")
+    audio_entry[24:28] = (16000 << 16).to_bytes(4, "big")
+    esds = _mp4_box("esds", bytes(4) + _mp4_eld_es_descriptor(config))
+    sample_entry = _mp4_box("mp4a", bytes(audio_entry) + esds)
+    empty_table = (
+        _mp4_box("stts", bytes(8))
+        + _mp4_box("stsc", bytes(8))
+        + _mp4_box("stsz", bytes(12))
+        + _mp4_box("stco", bytes(8))
+    )
+    stbl = _mp4_box("stbl", _mp4_box("stsd", bytes(4) + (1).to_bytes(4, "big") + sample_entry) + empty_table)
+    dref = _mp4_box("dref", bytes(4) + (1).to_bytes(4, "big") + _mp4_box("url ", (1).to_bytes(4, "big")))
+    minf = _mp4_box("minf", _mp4_box("smhd", bytes(8)) + _mp4_box("dinf", dref) + stbl)
+    mdia = _mp4_box("mdia", _mp4_box("mdhd", bytes(mdhd)) + hdlr + minf)
+    trak = _mp4_box("trak", _mp4_box("tkhd", bytes(tkhd)) + mdia)
+    trex = bytearray(24)
+    trex[4:8] = (1).to_bytes(4, "big")
+    trex[8:12] = (1).to_bytes(4, "big")
+    moov = _mp4_box("moov", _mp4_box("mvhd", bytes(mvhd)) + trak + _mp4_box("mvex", _mp4_box("trex", bytes(trex))))
+    return _mp4_box("ftyp", b"iso6" + bytes(4) + b"iso6mp41") + moov
 
-    latm = bytearray(len(bits) // 8)
-    for index, bit in enumerate(bits):
-        latm[index // 8] |= bit << (7 - index % 8)
-    if len(latm) > 0x1FFF:
-        raise ValueError("AAC-ELD LATM frame exceeds the LOAS frame limit")
-    header = ((0x2B7 << 13) | len(latm)).to_bytes(3, "big")
-    return header + latm
+
+def aac_eld_fmp4_fragment(data: bytes, sequence: int, decode_time: int) -> bytes:
+    """Wrap one 480-sample AAC-ELD access unit in an fMP4 media fragment."""
+    if not data:
+        raise ValueError("AAC-ELD access unit must not be empty")
+    mfhd = _mp4_box("mfhd", bytes(4) + sequence.to_bytes(4, "big"))
+    tfhd = _mp4_box("tfhd", (0x020000).to_bytes(4, "big") + (1).to_bytes(4, "big"))
+    tfdt = _mp4_box("tfdt", (0x01000000).to_bytes(4, "big") + decode_time.to_bytes(8, "big"))
+    trun = _mp4_box(
+        "trun",
+        (0x701).to_bytes(4, "big")
+        + (1).to_bytes(4, "big")
+        + bytes(4)
+        + (480).to_bytes(4, "big")
+        + len(data).to_bytes(4, "big")
+        + (0x02000000).to_bytes(4, "big"),
+    )
+    moof = bytearray(_mp4_box("moof", mfhd + _mp4_box("traf", tfhd + tfdt + trun)))
+    trun_type = moof.find(b"trun")
+    moof[trun_type + 12 : trun_type + 16] = (len(moof) + 8).to_bytes(4, "big")
+    return bytes(moof) + _mp4_box("mdat", data)
+
+
+def _mp4_box(kind: str, payload: bytes) -> bytes:
+    return (len(payload) + 8).to_bytes(4, "big") + kind.encode("ascii") + payload
+
+
+def _mp4_matrix(buffer: bytearray, offset: int) -> None:
+    buffer[offset : offset + 4] = (0x00010000).to_bytes(4, "big")
+    buffer[offset + 16 : offset + 20] = (0x00010000).to_bytes(4, "big")
+    buffer[offset + 32 : offset + 36] = (0x40000000).to_bytes(4, "big")
+
+
+def _mp4_eld_es_descriptor(config: bytes) -> bytes:
+    specific = bytes([5, len(config)]) + config
+    decoder_body = bytes([0x40, 0x15, 0, 0, 0]) + (64000).to_bytes(4, "big") + (32000).to_bytes(4, "big") + specific
+    decoder = bytes([4, len(decoder_body)]) + decoder_body
+    sl = bytes([6, 1, 2])
+    es_body = (2).to_bytes(2, "big") + bytes([0]) + decoder + sl
+    return bytes([3, len(es_body)]) + es_body
 
 
 def _ecdh_session_key(envelope: bytes, ecc_private_hex: str) -> bytes:

@@ -57,17 +57,17 @@ def test_decode_audio_frame_includes_aac_eld_config():
     assert p2p.decode_audio_frame(frame) == ("aac-eld", b"audio", bytes.fromhex("f8f03000"))
 
 
-def test_wrap_aac_eld_latm_emits_config_once_and_valid_loas_lengths():
+def test_aac_eld_fmp4_carries_config_and_raw_access_unit():
     config = p2p.AAC_ELD_AUDIO_SPECIFIC_CONFIG
-    first = p2p.wrap_aac_eld_latm(b"first-frame", config, include_config=True)
-    following = p2p.wrap_aac_eld_latm(b"next-frame", config, include_config=False)
+    init = p2p.aac_eld_fmp4_init(config)
+    payload = bytes.fromhex("7391a04a")
+    fragment = p2p.aac_eld_fmp4_fragment(payload, sequence=1, decode_time=0)
 
-    assert first[0] == following[0] == 0x56
-    assert (first[1] & 0xE0) == (following[1] & 0xE0) == 0xE0
-    assert ((first[1] & 0x1F) << 8 | first[2]) == len(first) - 3
-    assert ((following[1] & 0x1F) << 8 | following[2]) == len(following) - 3
-    assert first[3] & 0x80 == 0
-    assert following[3] & 0x80 == 0x80
+    assert init.startswith(bytes.fromhex("000000186674797069736f36"))
+    assert b"mp4a" in init and b"esds" in init
+    assert config in init
+    assert b"moof" in fragment and b"mdat" in fragment
+    assert fragment.endswith(payload)
 
 
 def test_audio_frame_command_reaches_stream_callback():

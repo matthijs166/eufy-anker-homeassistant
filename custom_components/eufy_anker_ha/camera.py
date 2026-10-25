@@ -11,7 +11,14 @@ from homeassistant.components.ffmpeg import get_ffmpeg_manager
 from .api import EufyError
 from .const import DOMAIN
 from .entity import EufyEntity
-from .p2p import P2PError, has_idr, keyframe_to_jpeg, sniff_codec, wrap_aac_eld_latm
+from .p2p import (
+    P2PError,
+    aac_eld_fmp4_fragment,
+    aac_eld_fmp4_init,
+    has_idr,
+    keyframe_to_jpeg,
+    sniff_codec,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -47,7 +54,9 @@ class LiveRelay:
         self._video_codec = "h264"
         self._audio_codec: str | None = None
         self._audio_config: bytes | None = None
-        self._audio_latm_started = False
+        self._audio_eld_initialized = False
+        self._audio_eld_sequence = 1
+        self._audio_eld_decode_time = 0
         self._video_pending: list[bytes] = []
         self._audio_pending: list[bytes] = []
         self._video_ready: asyncio.Future | None = None
@@ -116,7 +125,9 @@ class LiveRelay:
     def _on_audio(self, codec: str, data: bytes, config: bytes | None = None) -> None:
         if codec != self._audio_codec:
             self._audio_config = config
-            self._audio_latm_started = False
+            self._audio_eld_initialized = False
+            self._audio_eld_sequence = 1
+            self._audio_eld_decode_time = 0
             _LOGGER.debug("Audio codec for %s: %s", self.sn, codec)
         self._audio_codec = codec
         if self._audio_ready and not self._audio_ready.done():
@@ -125,8 +136,15 @@ class LiveRelay:
             if not self._audio_config:
                 _LOGGER.debug("AAC-ELD audio for %s has no AudioSpecificConfig", self.sn)
                 return
-            data = wrap_aac_eld_latm(data, self._audio_config, not self._audio_latm_started)
-            self._audio_latm_started = True
+            if not self._audio_eld_initialized:
+                self._write_audio(aac_eld_fmp4_init(self._audio_config))
+                self._audio_eld_initialized = True
+            data = aac_eld_fmp4_fragment(data, self._audio_eld_sequence, self._audio_eld_decode_time)
+            self._audio_eld_sequence += 1
+            self._audio_eld_decode_time += 480
+        self._write_audio(data)
+
+    def _write_audio(self, data: bytes) -> None:
         if self._audio_writer and not self._audio_writer.is_closing():
             self._audio_writer.write(data)
         else:
@@ -179,7 +197,7 @@ class LiveRelay:
             if audio_codec == "g711a":
                 args.extend(["-f", "alaw", "-ar", "16000", "-ac", "1"])
             elif audio_codec == "aac-eld":
-                args.extend(["-f", "latm"])
+                args.extend(["-f", "mov"])
             else:
                 args.extend(["-f", "aac"])
             args.extend(["-i", f"tcp://127.0.0.1:{port}"])
@@ -260,7 +278,9 @@ class LiveRelay:
                     self._video_pending, self._audio_pending = [], []
                     self._audio_codec = None
                     self._audio_config = None
-                    self._audio_latm_started = False
+                    self._audio_eld_initialized = False
+                    self._audio_eld_sequence = 1
+                    self._audio_eld_decode_time = 0
                     loop = asyncio.get_running_loop()
                     self._video_ready = loop.create_future()
                     self._audio_ready = loop.create_future()
