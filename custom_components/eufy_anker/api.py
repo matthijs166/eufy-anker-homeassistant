@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import time
 from typing import Any
 
@@ -94,6 +95,26 @@ def privacy_enabled(device: dict[str, Any]) -> bool:
         if str(param.get("param_type")) == str(PARAM_PRIVACY_MODE):
             return str(param.get("param_value")) in ("1", "True", "true")
     return False
+
+
+def _looks_like_html(text: str) -> bool:
+    head = text.lstrip()[:200].lower()
+    return head.startswith(("<!doctype html", "<html", "<!--"))
+
+
+def _proxy_error_message(url: str, status: int, text: str) -> str:
+    """Describe a non-JSON (HTML) answer such as a Cloudflare/proxy error page."""
+    match = re.search(r"<title>(.*?)</title>", text, re.I | re.S)
+    title = " ".join(match.group(1).split()) if match else ""
+    if "cloudflare" in text.lower() or "cf-error" in text:
+        who = "A Cloudflare/proxy error page"
+    else:
+        who = "An HTML error page"
+    hint = (
+        " The request was likely blocked or timed out by a Cloudflare/reverse proxy in front of "
+        "Home Assistant or Eufy; try again via the local Home Assistant address."
+    )
+    return f"{who} was returned for {url} (HTTP {status}{': ' + title if title else ''}).{hint}"
 
 
 class EufyApi:
@@ -186,7 +207,10 @@ class EufyApi:
                 try:
                     return resp.status, json.loads(text) if text else {}
                 except ValueError:
-                    return resp.status, text
+                    pass
+                if _looks_like_html(text) or "cf-ray" in resp.headers or "cloudflare" in resp.headers.get("server", "").lower():
+                    raise EufyConnectionError(_proxy_error_message(url, resp.status, text))
+                return resp.status, text
         except (ClientError, TimeoutError) as err:
             raise EufyConnectionError(
                 f"Request to {url} failed: {type(err).__name__}: {err or 'no details'}"
