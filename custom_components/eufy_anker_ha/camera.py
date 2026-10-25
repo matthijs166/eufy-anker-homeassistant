@@ -9,6 +9,7 @@ from .entity import EufyEntity
 
 async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator.vlog("camera platform setup: %s", list(coordinator.data))
     async_add_entities(EufyCamera(coordinator, sn) for sn in coordinator.data)
 
 
@@ -24,4 +25,7 @@ class EufyCamera(EufyEntity, Camera):
 
     async def async_camera_image(self, width=None, height=None):
         url = self.info.get("image_url")
-        return await self.coordinator.api.get_image(url) if url else None
+        self.coordinator.vlog("ACTION camera image %s url=%s size=%sx%s", self.sn, url, width, height)
+        image = await self.coordinator.api.get_image(url) if url else None
+        self.coordinator.vlog("camera image %s -> %s bytes", self.sn, len(image) if image else None)
+        return image

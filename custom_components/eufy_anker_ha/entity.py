@@ -16,6 +16,7 @@ class EufyEntity(CoordinatorEntity[EufyCoordinator]):
     def __init__(self, coordinator: EufyCoordinator, sn: str) -> None:
         super().__init__(coordinator)
         self.sn = sn
+        coordinator.vlog("entity created: %s for %s", type(self).__name__, sn)
         dev = coordinator.data[sn]["device"]
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, sn)},
@@ -27,6 +28,10 @@ class EufyEntity(CoordinatorEntity[EufyCoordinator]):
     @property
     def available(self) -> bool:
         return super().available and self.sn in self.coordinator.data
+
+    def _handle_coordinator_update(self) -> None:
+        self.coordinator.vlog("entity update: %s %s", type(self).__name__, self.sn)
+        super()._handle_coordinator_update()
 
     @property
     def info(self) -> dict:

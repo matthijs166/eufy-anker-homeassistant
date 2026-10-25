@@ -9,6 +9,7 @@ from .entity import EufyEntity
 
 async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator.vlog("binary_sensor platform setup: %s", list(coordinator.data))
     async_add_entities(EufyMotion(coordinator, sn) for sn in coordinator.data)
 
 
@@ -25,7 +26,9 @@ class EufyMotion(EufyEntity, BinarySensorEntity):
     @property
     def is_on(self) -> bool:
         info = self.info
-        return bool(info["last_event"]) and info["now"] - _secs(info["last_event"]) <= MOTION_WINDOW
+        on = bool(info["last_event"]) and info["now"] - _secs(info["last_event"]) <= MOTION_WINDOW
+        self.coordinator.vlog("STATE detection %s -> %s (last_event=%s)", self.sn, on, info["last_event"])
+        return on
 
 
 def _secs(ts: int) -> int:

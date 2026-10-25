@@ -36,6 +36,31 @@ from .crypto import (
 
 _LOGGER = logging.getLogger(__name__)
 
+_SECRET_KEYS = {
+    "password", "token", "auth_token", "x-auth-token", "authorization", "gtoken", "share_key",
+    "public_key", "verify_code", "answer", "x-key-sign", "x-signature", "private_key",
+}
+
+
+def redact(obj: Any) -> Any:
+    """Return a copy of obj with secrets masked, for verbose logging."""
+    if isinstance(obj, dict):
+        return {
+            k: "***" if str(k).lower() in _SECRET_KEYS and v else redact(v) for k, v in obj.items()
+        }
+    if isinstance(obj, list):
+        return [redact(v) for v in obj]
+    return obj
+
+
+def _fmt(obj: Any, limit: int = 4000) -> str:
+    try:
+        text = obj if isinstance(obj, str) else json.dumps(redact(obj), default=str)
+    except (TypeError, ValueError):
+        text = str(obj)
+    return text if len(text) <= limit else text[:limit] + f"...(+{len(text) - limit} chars)"
+
+
 APP_NAME = "eufy_mega"
 APP_VERSION = "6.0.41_26142"
 OS_VERSION = "36"
@@ -43,9 +68,13 @@ PHONE_MODELS = ("Pixel 8", "Pixel 7", "SM-S911B", "OnePlus 11", "Redmi Note 12")
 REGIONS = ("us-pr", "eu-pr")
 
 PARAM_PRIVACY_MODE = 99904
-# Params the camera itself reacts to (cloud-only 99904 is not pushed to it)
-PARAM_DEVS_SWITCH = 1035
+# 6250 is the privacy param the camera itself reacts to; 1035 is camera power
+# (NOT privacy) and must never be written for a privacy toggle.
 PARAM_PRIVACY_6250 = 6250
+# Camera power (CameraActions.on/off in eufy-sdk). Disable bit by default (on = 0);
+# enable bit (on = 1) for the floodlight cams below.
+PARAM_CAMERA_POWER = 1035
+ENABLE_BIT_MODELS = ("T8422", "T8424")
 KEY_TTL = 12 * 3600
 
 CODE_OK = 0
@@ -93,11 +122,25 @@ class EufyTwoFactorRequired(EufyError):
 
 
 def privacy_enabled(device: dict[str, Any]) -> bool:
-    """Read the privacy-mode param from a device record."""
-    for param in device.get("params") or []:
-        if str(param.get("param_type")) == str(PARAM_PRIVACY_MODE):
-            return str(param.get("param_value")) in ("1", "True", "true")
+    """Read the privacy-mode param (99904, else 6250) from a device record."""
+    values = {str(p.get("param_type")): str(p.get("param_value")) for p in device.get("params") or []}
+    for key in (PARAM_PRIVACY_MODE, PARAM_PRIVACY_6250):
+        if str(key) in values:
+            return values[str(key)] in ("1", "True", "true")
     return False
+
+
+def _power_enable_bit(device: dict[str, Any]) -> bool:
+    return str(device.get("device_model") or "").upper().startswith(ENABLE_BIT_MODELS)
+
+
+def camera_power_on(device: dict[str, Any]) -> bool | None:
+    """Camera power from param 1035 (None when the device does not report it)."""
+    for param in device.get("params") or []:
+        if str(param.get("param_type")) == str(PARAM_CAMERA_POWER):
+            raw = str(param.get("param_value")) in ("1", "True", "true")
+            return raw if _power_enable_bit(device) else not raw
+    return None
 
 
 def _looks_like_html(text: str) -> bool:
@@ -129,10 +172,10 @@ class EufyApi:
         email: str,
         password: str,
         auth: dict[str, Any] | None = None,
-        debug: bool = False,
+        verbose: bool = False,
         country: str = "US",
     ) -> None:
-        self.debug = debug
+        self.verbose = verbose
         self._session = session
         self._email = email
         self._password = password
@@ -156,6 +199,10 @@ class EufyApi:
         self._content_types: dict[str, str] = {}
         self._captcha_id = ""
         self._pending_2fa = False
+
+    def _vlog(self, msg: str, *args: Any) -> None:
+        if self.verbose:
+            _LOGGER.info("[verbose] " + msg, *args)
 
     # -- state ------------------------------------------------------------
 
@@ -201,12 +248,11 @@ class EufyApi:
     # -- transport --------------------------------------------------------
 
     async def _http_post(self, url: str, body: str, headers: dict[str, str]) -> tuple[int, Any]:
-        level = logging.WARNING if self.debug else logging.DEBUG
-        _LOGGER.log(level, "POST %s", url)
+        self._vlog("HTTP POST %s headers=%s body=%s", url, _fmt(headers), _fmt(body, 500))
         try:
             async with self._session.post(url, data=body.encode(), headers=headers, timeout=20) as resp:
                 text = await resp.text()
-                _LOGGER.log(level, "POST %s -> HTTP %s: %s", url, resp.status, text[:300])
+                self._vlog("HTTP POST %s -> HTTP %s: %s", url, resp.status, _fmt(text, 1500))
                 try:
                     return resp.status, json.loads(text) if text else {}
                 except ValueError:
@@ -222,6 +268,7 @@ class EufyApi:
     async def _estimate_domain(self) -> None:
         """Discover the region shard (step 1)."""
         last: Exception | None = None
+        self._vlog("estimate_domain: start region=%s country=%s", self._region, self._country)
         for region in dict.fromkeys((self._region, *REGIONS)):
             try:
                 status, res = await self._http_post(
@@ -245,6 +292,7 @@ class EufyApi:
             else:
                 self._region = region
             self._bootstrap = domain if domain and not domain.startswith("mega-") else None
+            self._vlog("estimate_domain: region=%s bootstrap=%s", self._region, self._bootstrap)
             return
         raise last or EufyConnectionError("estimate_domain failed")
 
@@ -256,6 +304,7 @@ class EufyApi:
             return cached
         target = host if lifehost else (self._bootstrap or f"app-openapi-{self._region}.eufy.com")
         path = "/v3/openapi/oauth/key/exchange" if lifehost else "/openapi/oauth/key/exchange"
+        self._vlog("key exchange with %s (lifehost=%s)", target, lifehost)
         prep = prepare_key_exchange(EUFYLIFE_LOCAL_KEY_HEX if lifehost else MEGA_LOCAL_KEY_HEX)
         status, res = await self._http_post(
             f"https://{target}{path}",
@@ -276,6 +325,7 @@ class EufyApi:
                 env.get("code"),
                 status,
             )
+        self._vlog("key exchange ok, ident=%s", prep["ident"])
         entry = {"share_key": finish_key_exchange(prep, server_pub), "ident": prep["ident"], "at": time.time()}
         if lifehost:
             self._host_keys[host or ""] = entry
@@ -287,6 +337,7 @@ class EufyApi:
         self, host: str, path: str, body: Any, authed: bool = True, _retried: bool = False
     ) -> Any:
         """Signed + encrypted POST; returns the decrypted ``data``."""
+        self._vlog("REQUEST https://%s%s authed=%s body=%s", host, path, authed, _fmt(body))
         entry = await self._ensure_key(host)
         enc_body = encrypt_body(json.dumps(body if body is not None else {}), entry["share_key"])
         cached = self._content_types.get(host)
@@ -314,9 +365,10 @@ class EufyApi:
                 if isinstance(data, str) and data:
                     plain = decrypt_body(data, entry["share_key"])
                     try:
-                        return json.loads(plain)
+                        data = json.loads(plain)
                     except ValueError:
-                        return plain
+                        data = plain
+                self._vlog("RESPONSE %s%s -> %s", host, path, _fmt(data))
                 return data
             msg = str(env.get("msg") or res)[:200]
             data = env.get("data")
@@ -335,6 +387,7 @@ class EufyApi:
             else:
                 self._key = None
             return await self._post_signed(host, path, body, authed, True)
+        self._vlog("RESPONSE %s%s FAILED HTTP %s code=%s msg=%s", host, path, status, code, msg)
         raise EufyApiError(f"{path} failed (HTTP {status}/{code}): {msg}", code, status)
 
     def _mega_host(self, service: str) -> str:
@@ -372,6 +425,10 @@ class EufyApi:
     ) -> None:
         """Log in. Raises captcha / 2FA exceptions when more input is needed."""
         verifying = bool(verify_code) and self._pending_2fa
+        self._vlog(
+            "LOGIN start email=%s captcha=%s verify_code=%s 2fa_pending=%s",
+            self._email, bool(captcha_id), bool(verify_code), self._pending_2fa,
+        )
         if not verifying:
             # a fresh attempt must not carry an old token or key
             self._auth.pop("token", None)
@@ -420,6 +477,7 @@ class EufyApi:
             )
             raise EufyTwoFactorRequired
         self._pending_2fa = False
+        self._vlog("LOGIN ok user_id=%s token_expires=%s", self._auth.get("user_id"), self._auth.get("expires"))
         # re-exchange WITH the token so the gateway binds the key ident to the user
         self._key = None
         await self._ensure_key()
@@ -433,6 +491,7 @@ class EufyApi:
             host = self._security_host() if host_kind == "security" else self._mega_host(service)
             return await self._post_signed(host, path, body)
 
+        self._vlog("CALL %s %s service=%s", host_kind, path, service)
         if not self._auth.get("token"):
             await self.login()
         try:
@@ -440,27 +499,32 @@ class EufyApi:
         except EufyApiError as err:
             if err.status != 401 and err.code != CODE_SESSION_KICKED:
                 raise
+        self._vlog("session rejected, logging in again")
         await self.login()
         return await call()
 
     async def get_cameras(self) -> list[dict[str, Any]]:
         """Return all devices of the account (merged across houses)."""
+        self._vlog("get_cameras: fetching house + device lists")
         bodies: list[dict[str, Any]] = [{}]
         try:
             houses = await self._authed("mega", "/app/house/get_house_list", {}, "house")
             bodies += [{"house_id": h["house_id"]} for h in (houses or {}).get("house_infos") or []]
         except EufyApiError as err:
             _LOGGER.debug("get_house_list failed: %s", err)
+            self._vlog("get_house_list failed: %s", err)
         seen: dict[str, dict[str, Any]] = {}
         for body in bodies:
             data = await self._authed("mega", "/app/house/get_devs_list", body, "house")
             for dev in (data or {}).get("devices") or []:
                 if dev.get("device_sn"):
                     seen[dev["device_sn"]] = dev
+        self._vlog("get_cameras: %d devices: %s", len(seen), {k: v.get("device_name") for k, v in seen.items()})
         return list(seen.values())
 
     async def get_events(self) -> list[dict[str, Any]]:
         """Return recent alarm/motion events across all devices."""
+        self._vlog("get_events: fetching alarm records")
         data = await self._authed(
             "security",
             "/v1/event/app/get_all_alarm_record",
@@ -472,16 +536,28 @@ class EufyApi:
     async def get_image(self, url: str) -> bytes | None:
         """Download an image."""
         async with self._session.get(url) as resp:
+            self._vlog("GET image %s -> HTTP %s", url, resp.status)
             return await resp.read() if resp.status == 200 else None
 
+    async def get_device_params(self, device_sn: str) -> list[dict[str, Any]] | None:
+        """Fresh param list of one device (owner-only endpoint; None when unavailable)."""
+        try:
+            data = await self._authed(
+                "mega", "/app/devicemanage/get_device_param_list", {"device_sns": [device_sn]}, "devicemanage"
+            )
+        except EufyApiError as err:
+            self._vlog("get_device_param_list unavailable for %s: %s", device_sn, err)
+            return None
+        items = data if isinstance(data, list) else (data or {}).get("params") or (data or {}).get("device_params")
+        return items if isinstance(items, list) else None
+
     async def set_privacy(self, device: dict[str, Any], enabled: bool) -> None:
-        """Turn privacy mode on or off."""
+        """Turn privacy mode on or off (writes 99904, plus 6250 when the device has it)."""
         present = {str(p.get("param_type")) for p in device.get("params") or []}
-        types = [PARAM_PRIVACY_MODE] + [
-            t for t in (PARAM_DEVS_SWITCH, PARAM_PRIVACY_6250) if str(t) in present
-        ]
+        types = [PARAM_PRIVACY_MODE] + ([PARAM_PRIVACY_6250] if str(PARAM_PRIVACY_6250) in present else [])
         value = "1" if enabled else "0"
-        await self._authed(
+        self._vlog("set_privacy %s -> %s params=%s", device.get("device_sn"), value, types)
+        res = await self._authed(
             "security",
             "/v1/app/upload_devs_params",
             {
@@ -491,3 +567,20 @@ class EufyApi:
                 "transaction": str(int(time.time() * 1000)),
             },
         )
+        self._vlog("set_privacy %s result=%s", device.get("device_sn"), _fmt(res))
+
+    async def set_camera_power(self, device: dict[str, Any], on: bool) -> None:
+        """Power the camera on/off (param 1035, polarity per model)."""
+        raw = on if _power_enable_bit(device) else not on
+        self._vlog("set_camera_power %s -> on=%s raw=%s", device.get("device_sn"), on, int(raw))
+        res = await self._authed(
+            "security",
+            "/v1/app/upload_devs_params",
+            {
+                "device_sn": device["device_sn"],
+                "station_sn": device.get("station_sn", device["device_sn"]),
+                "params": [{"param_type": PARAM_CAMERA_POWER, "param_value": "1" if raw else "0"}],
+                "transaction": str(int(time.time() * 1000)),
+            },
+        )
+        self._vlog("set_camera_power %s result=%s", device.get("device_sn"), _fmt(res))

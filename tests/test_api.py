@@ -16,12 +16,12 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
 # Load the modules without running the package __init__ (needs Home Assistant).
-_PKG_DIR = Path(__file__).parent.parent / "custom_components" / "eufy"
-_pkg = types.ModuleType("eufy")
+_PKG_DIR = Path(__file__).parent.parent / "custom_components" / "eufy_anker_ha"
+_pkg = types.ModuleType("eufy_anker_ha")
 _pkg.__path__ = [str(_PKG_DIR)]
-sys.modules["eufy"] = _pkg
-api_mod = importlib.import_module("eufy.api")
-crypto = importlib.import_module("eufy.crypto")
+sys.modules["eufy_anker_ha"] = _pkg
+api_mod = importlib.import_module("eufy_anker_ha.api")
+crypto = importlib.import_module("eufy_anker_ha.crypto")
 
 
 def _pub_hex(key):

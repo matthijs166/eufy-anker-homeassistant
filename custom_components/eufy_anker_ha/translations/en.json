@@ -1,0 +1,60 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Eufy login",
+        "description": "Log in with your Eufy / Anker account. Tip: use a secondary account shared with your cameras.",
+        "data": {
+          "email": "Email",
+          "password": "Password",
+          "verbose_logging": "Verbose logging (log all actions, syncs, inputs and outputs)",
+          "scan_interval": "Cloud update interval (seconds)",
+          "log_device_properties": "Log all device properties on every sync (diagnostics)"
+        }
+      },
+      "captcha": {
+        "title": "Captcha",
+        "description": "{image}\n\nEnter the characters shown.",
+        "data": {
+          "captcha": "Captcha",
+          "restart": "Start over (reset login)"
+        }
+      },
+      "2fa": {
+        "title": "Two-factor authentication",
+        "description": "Enter the verification code Eufy sent you.",
+        "data": {
+          "code": "Verification code",
+          "restart": "Start over (reset login)"
+        }
+      },
+      "cameras": {
+        "title": "Select cameras",
+        "description": "All cameras found on your account are listed.",
+        "data": {
+          "cameras": "Cameras"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid credentials or code: {error}",
+      "cannot_connect": "Could not connect to Eufy: {error}"
+    },
+    "abort": {
+      "already_configured": "Account already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Eufy settings",
+        "data": {
+          "cameras": "Cameras",
+          "verbose_logging": "Verbose logging (log all actions, syncs, inputs and outputs)",
+          "scan_interval": "Cloud update interval (seconds)",
+          "log_device_properties": "Log all device properties on every sync (diagnostics)"
+        }
+      }
+    }
+  }
+}
