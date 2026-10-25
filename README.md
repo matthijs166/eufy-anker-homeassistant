@@ -15,7 +15,6 @@ For every camera you pick, the integration creates:
 | Entity | Purpose |
 | --- | --- |
 | `camera` | Shows the **last image** of the camera |
-| `binary_sensor` (Detection) | Turns on for 60 s after a detection event — use it as an **automation trigger** |
 | `switch` (Privacy mode) | **Enable / disable privacy mode** |
 | `switch` (Camera power) | **Turn the camera on / off** |
 | `sensor` (Wi-Fi signal strength) | Reports the camera's Wi-Fi RSSI in dBm |
@@ -44,4 +43,4 @@ The login flow and the signed/encrypted `algo_ecdh` transport (region discovery,
 
 ## Settings
 
-Under **Configure** on the integration you can choose the cameras, turn on **verbose logging** (writes all actions, syncs and requests to the Home Assistant log) and set the **cloud update interval** (default 30 s). An optional setting logs all device properties on every sync, and a "Log device info" button on each camera writes all its decoded properties to the log, and a diagnostics download is available on the device page.
+Under **Configure** on the integration you can choose the cameras, turn on **verbose logging** (writes all actions, syncs and requests to the Home Assistant log) and set the **cloud update interval** (default 30 s). An optional setting logs all device properties on every sync, and a diagnostics download is available on the device page.

@@ -76,7 +76,7 @@ async def test_live_relay_serves_cached_gop_to_second_viewer():
                 return data, time.monotonic() - start
 
             first, cold = await read_some(20_000, 30)
-            assert first[:4] == b"\x00\x00\x00\x01" or first[:3] == b"\x00\x00\x01"
+            assert first[0] == 0x47 and all(first[offset] == 0x47 for offset in range(0, len(first), 188))
             second, warm = await read_some(20_000, 5)
             print(f"\nRELAY: cold start {cold:.1f}s, warm start {warm:.2f}s")
             assert warm < 1.0, "second viewer did not get the cached GOP immediately"

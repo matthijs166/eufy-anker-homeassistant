@@ -73,6 +73,10 @@ PARAM_PRIVACY_MODE = 99904
 # written by us and can be stale.
 PARAM_PRIVACY_6250 = 6250
 PARAM_NIGHT_VISION = 1277
+PTZ_COMMAND = 6030
+PTZ_DIRECTIONS = {"left": 1, "right": 2, "up": 3, "down": 4}
+PTZ_EVIDENCE_PARAMS = {1029, 6090, 6091, 6092, 6210}
+PTZ_DEVICE_TYPES = {31, 35, 47, 48, 111, 10008, 10009, 10010, 10011}
 KEY_TTL = 12 * 3600
 
 CODE_OK = 0
@@ -169,6 +173,29 @@ def privacy_enabled(device: dict[str, Any]) -> bool:
         if str(key) in values:
             return values[str(key)] in ("1", "True", "true")
     return False
+
+
+def supports_ptz(device: dict[str, Any]) -> bool:
+    """Whether the device record identifies a pan/tilt camera."""
+    model = str(device.get("device_model") or device.get("model") or "")
+    if model.upper() == "T8134":
+        return False
+    params = {
+        int(param["param_type"])
+        for param in device.get("params") or []
+        if str(param.get("param_type", "")).isdigit()
+    }
+    device_type = device.get("device_type", device.get("deviceType"))
+    try:
+        device_type = int(device_type)
+    except (TypeError, ValueError):
+        device_type = None
+    return (
+        bool(params & PTZ_EVIDENCE_PARAMS)
+        or device_type in PTZ_DEVICE_TYPES
+        or re.search(r"pan.?tilt|\bptz\b|\bpt\b|s3[45]0", model, re.IGNORECASE) is not None
+        or model.upper() == "T8E00"
+    )
 
 
 def _looks_like_html(text: str) -> bool:
@@ -739,3 +766,13 @@ class EufyApi:
             },
         )
         self._vlog("set_night_vision %s result=%s", device.get("device_sn"), _fmt(res))
+
+    async def move_ptz(self, device: dict[str, Any], direction: str) -> None:
+        """Move a PTZ camera one step in the requested direction over P2P."""
+        if direction not in PTZ_DIRECTIONS:
+            raise ValueError(f"Unsupported PTZ direction: {direction}")
+        message = {
+            "commandType": PTZ_COMMAND,
+            "data": {"cmd_type": 1, "rotate_type": PTZ_DIRECTIONS[direction], "zoom": 1.0},
+        }
+        await self._push_to_device(device, message)

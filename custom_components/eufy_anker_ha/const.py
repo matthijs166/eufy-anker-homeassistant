@@ -1,7 +1,7 @@
 """Constants for the Eufy Anker integration."""
 
 DOMAIN = "eufy_anker_ha"
-PLATFORMS = ["camera", "binary_sensor", "switch", "button", "sensor", "select"]
+PLATFORMS = ["camera", "switch", "sensor", "select"]
 
 CONF_EMAIL = "email"
 CONF_PASSWORD = "password"
@@ -15,4 +15,3 @@ DEFAULT_SCAN_INTERVAL = 30
 MIN_SCAN_INTERVAL = 10
 MAX_SCAN_INTERVAL = 3600
 PACKAGE_LOGGER = "custom_components.eufy_anker_ha"
-MOTION_WINDOW = 60

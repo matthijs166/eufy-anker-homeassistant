@@ -24,7 +24,7 @@ AUDIO_START_WAIT_S = 3
 
 
 class LiveRelay:
-    """One shared P2P stream per camera, fanned out as raw Annex-B over a loopback TCP socket.
+    """Mux one shared P2P audio/video stream to MPEG-TS over a loopback TCP socket.
 
     The latest GOP is cached so a new viewer starts decoding immediately.
     """
@@ -103,6 +103,7 @@ class LiveRelay:
         if self._gop_bytes < MAX_GOP_BYTES:
             self._gop.append(data)
             self._gop_bytes += len(data)
+
     def _on_audio(self, codec: str, data: bytes) -> None:
         self._audio_codec = codec
         if self._audio_ready and not self._audio_ready.done():

@@ -46,7 +46,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coordinator.async_config_entry_first_refresh()
     registry = er.async_get(hass)
     for ent in er.async_entries_for_config_entry(registry, entry.entry_id):
-        if ent.unique_id.endswith("_power"):
+        if ent.unique_id.endswith(("_power", "_detection", "_log_info")):
             registry.async_remove(ent.entity_id)
     coordinator.vlog("first refresh done, forwarding platforms %s", PLATFORMS)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator

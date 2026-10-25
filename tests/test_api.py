@@ -50,6 +50,18 @@ def test_decode_audio_rejects_unknown_or_empty_frames():
     assert p2p.decode_audio(bytes(16)) is None
 
 
+def test_audio_frame_command_reaches_stream_callback():
+    session = p2p.P2PSession("sn", "a-1-b", "account")
+    received = []
+    session._audio_cb = lambda codec, data: received.append((codec, data))
+    frame = bytearray(16) + b"audio"
+    frame[p2p.AUDIO_TYPE_OFFSET] = 0
+
+    session._handle_frame((p2p.CMD_AUDIO_FRAME, len(frame), 0, 0), frame)
+
+    assert received == [("aac-lc", b"audio")]
+
+
 class FakeCloud:
     """Plays the gateway: key exchange, signature check, login, captcha, 2FA."""
 
@@ -204,3 +216,43 @@ async def test_set_privacy_uses_fresh_6250_param_when_device_list_omits_it(monke
 
     assert [param["param_type"] for param in submitted[0]["params"]] == [99904, 6250]
     assert all(param["param_value"] == "1" for param in submitted[0]["params"])
+
+
+@pytest.mark.parametrize(("direction", "rotate_type"), [("left", 1), ("right", 2), ("up", 3), ("down", 4)])
+@pytest.mark.asyncio
+async def test_move_ptz_sends_direction_command(monkeypatch, direction, rotate_type):
+    api = api_mod.EufyApi(None, "me@example.com", "s3cret")
+    submitted = []
+
+    async def push_to_device(device, message, cmd_id):
+        submitted.append((device, message, cmd_id))
+
+    monkeypatch.setattr(api, "_push_to_device", push_to_device)
+    device = {"device_sn": "T1"}
+
+    await api.move_ptz(device, direction)
+
+    assert submitted == [
+        (
+            device,
+            {"commandType": 6030, "data": {"cmd_type": 1, "rotate_type": rotate_type, "zoom": 1.0}},
+            api_mod.CMD_CONTROL_PAYLOAD,
+        )
+    ]
+
+
+def test_supports_ptz_uses_reported_evidence_and_known_device_types():
+    assert api_mod.supports_ptz({"params": [{"param_type": 6090, "param_value": "0"}]})
+    assert api_mod.supports_ptz({"device_type": 31})
+    assert api_mod.supports_ptz({"device_model": "Indoor Cam Pan & Tilt"})
+    assert api_mod.supports_ptz({"device_model": "T8E00"})
+    assert not api_mod.supports_ptz({"device_model": "T8134", "params": [{"param_type": 6090}]})
+    assert not api_mod.supports_ptz({"device_model": "Indoor Cam C220", "device_type": 30})
+
+
+@pytest.mark.asyncio
+async def test_move_ptz_rejects_unknown_direction():
+    api = api_mod.EufyApi(None, "me@example.com", "s3cret")
+
+    with pytest.raises(ValueError, match="Unsupported PTZ direction"):
+        await api.move_ptz({"device_sn": "T1"}, "northwest")

@@ -58,6 +58,10 @@ class EufyCoordinator(DataUpdateCoordinator[dict]):
         self.async_update_listeners()
         await self.async_request_refresh()
 
+    async def async_move_ptz(self, sn: str, direction: str) -> None:
+        """Move a camera one step in a cardinal direction."""
+        await self.api.move_ptz(self.data[sn]["device"], direction)
+
     async def _async_update_data(self) -> dict:
         self.vlog("SYNC start (interval=%s)", self.update_interval)
         try:
