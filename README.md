@@ -42,6 +42,6 @@ The login flow and the signed/encrypted `algo_ecdh` transport (region discovery,
 
 ## Settings
 
-Under **Configure** on the integration you can choose the cameras, turn on **verbose logging** (writes all actions, syncs and requests to the Home Assistant log) and set the **cloud update interval** (default 30 s). An optional setting logs all device properties on every sync, and a diagnostics download is available on the device page.
+Under **Configure** on the integration you can choose the cameras, turn on **verbose logging** (writes all actions, syncs and requests to the Home Assistant log) and set the **cloud update interval** (default 30 s). An optional setting logs all device properties on every sync, and a "Log device info" button on each camera writes all its decoded properties to the log, and a diagnostics download is available on the device page.
 
 > This integration uses the domain `eufy_anker_ha`. If you used an older version, remove the old `custom_components/eufy` folder and add the integration again.
