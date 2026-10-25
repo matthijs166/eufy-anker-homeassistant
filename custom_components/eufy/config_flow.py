@@ -66,7 +66,7 @@ class EufyConfigFlow(ConfigFlow, domain=DOMAIN):
         self._error_detail = ""
         if user_input:
             self._creds = {k: v for k, v in user_input.items() if k != CONF_DEBUG}
-            await self.async_set_unique_id(user_input[CONF_EMAIL].lower())
+            await self.async_set_unique_id(user_input[CONF_EMAIL].lower(), raise_on_progress=False)
             self._abort_if_unique_id_configured()
             self._api = EufyApi(async_get_clientsession(self.hass), user_input[CONF_EMAIL], user_input[CONF_PASSWORD],
                 debug=user_input.get(CONF_DEBUG, False),
@@ -89,14 +89,16 @@ class EufyConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def async_step_captcha(self, user_input: dict[str, Any] | None = None):
         errors: dict[str, str] = {}
-        if user_input:
+        if user_input and user_input.get("restart"):
+            return await self.async_step_user()
+        if user_input and user_input["captcha"]:
             if result := await self._try_login(
                 "captcha", errors, captcha_id=self._captcha_id, captcha_answer=user_input["captcha"]
             ):
                 return result
         return self.async_show_form(
             step_id="captcha",
-            data_schema=vol.Schema({vol.Required("captcha"): str}),
+            data_schema=vol.Schema({vol.Optional("captcha", default=""): str, vol.Optional("restart", default=False): bool}),
             description_placeholders={
                 "image": f"![captcha]({self._captcha_image})",
                 "error": self._error_detail,
@@ -106,12 +108,14 @@ class EufyConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def async_step_2fa(self, user_input: dict[str, Any] | None = None):
         errors: dict[str, str] = {}
-        if user_input:
+        if user_input and user_input.get("restart"):
+            return await self.async_step_user()
+        if user_input and user_input["code"]:
             if result := await self._try_login("2fa", errors, verify_code=user_input["code"]):
                 return result
         return self.async_show_form(
             step_id="2fa",
-            data_schema=vol.Schema({vol.Required("code"): str}),
+            data_schema=vol.Schema({vol.Optional("code", default=""): str, vol.Optional("restart", default=False): bool}),
             description_placeholders={"error": self._error_detail},
             errors=errors,
         )
