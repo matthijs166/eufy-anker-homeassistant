@@ -60,6 +60,7 @@ CMD_AUDIO_FRAME = 1301
 AUDIO_HEADER_LEN = 16
 AUDIO_TYPE_OFFSET = 5
 _AUDIO_CODECS = {0: "aac-lc", 2: "g711a", 7: "aac-eld"}
+AAC_ELD_AUDIO_SPECIFIC_CONFIG = bytes.fromhex("f8f03000")
 STATION_CHANNEL = 255
 FRAME_TYPE_L1 = 11
 
@@ -179,12 +180,62 @@ def has_idr(data: bytes, codec: str) -> bool:
 
 def decode_audio(payload: bytes) -> tuple[str, bytes] | None:
     """Return the codec and elementary audio data from a P2P audio frame."""
+    frame = decode_audio_frame(payload)
+    return frame[:2] if frame else None
+
+
+def decode_audio_frame(payload: bytes) -> tuple[str, bytes, bytes | None] | None:
+    """Decode audio data and include the station's implicit AAC-ELD config."""
     if len(payload) <= AUDIO_HEADER_LEN:
         return None
     codec = _AUDIO_CODECS.get(payload[AUDIO_TYPE_OFFSET])
     if codec is None:
         return None
-    return codec, payload[AUDIO_HEADER_LEN:]
+    config = AAC_ELD_AUDIO_SPECIFIC_CONFIG if codec == "aac-eld" else None
+    return codec, payload[AUDIO_HEADER_LEN:], config
+
+
+def wrap_aac_eld_latm(data: bytes, config: bytes, include_config: bool) -> bytes:
+    """Wrap one raw AAC-ELD access unit in a LOAS/LATM frame for FFmpeg."""
+    if not data or not config:
+        raise ValueError("AAC-ELD access unit and AudioSpecificConfig must not be empty")
+
+    bits: list[int] = []
+
+    def write_bits(value: int, count: int) -> None:
+        bits.extend((value >> shift) & 1 for shift in range(count - 1, -1, -1))
+
+    write_bits(0 if include_config else 1, 1)
+    if include_config:
+        write_bits(0, 1)  # audioMuxVersion
+        write_bits(1, 1)  # allStreamsSameTimeFraming
+        write_bits(0, 6)  # numSubFrames
+        write_bits(0, 4)  # numProgram
+        write_bits(0, 3)  # numLayer
+        for byte in config:
+            write_bits(byte, 8)
+        write_bits(0, 3)  # frameLengthType
+        write_bits(0xFF, 8)  # latmBufferFullness
+        write_bits(0, 1)  # otherDataPresent
+        write_bits(0, 1)  # crcCheckPresent
+
+    remaining = len(data)
+    while remaining >= 255:
+        write_bits(255, 8)
+        remaining -= 255
+    write_bits(remaining, 8)
+    for byte in data:
+        write_bits(byte, 8)
+    while len(bits) % 8:
+        bits.append(0)
+
+    latm = bytearray(len(bits) // 8)
+    for index, bit in enumerate(bits):
+        latm[index // 8] |= bit << (7 - index % 8)
+    if len(latm) > 0x1FFF:
+        raise ValueError("AAC-ELD LATM frame exceeds the LOAS frame limit")
+    header = ((0x2B7 << 13) | len(latm)).to_bytes(3, "big")
+    return header + latm
 
 
 def _ecdh_session_key(envelope: bytes, ecc_private_hex: str) -> bytes:
@@ -260,7 +311,7 @@ class P2PSession:
         self._reorder_timers: dict[int, asyncio.TimerHandle] = {}
         self._pending: dict[int, dict[str, Any]] = {}
         self._frame_cb: Callable[[int, int, bytes], None] | None = None
-        self._audio_cb: Callable[[str, bytes], None] | None = None
+        self._audio_cb: Callable[[str, bytes, bytes | None], None] | None = None
         self._reply = asyncio.Event()
         self._reply_code: int | None = None
         self._key_blob = b""
@@ -486,7 +537,7 @@ class P2PSession:
         elif cmd == CMD_VIDEO_FRAME and self._frame_cb:
             self._frame_cb(cmd, sign, payload)
         elif cmd == CMD_AUDIO_FRAME and self._audio_cb:
-            audio = decode_audio(payload)
+            audio = decode_audio_frame(payload)
             if audio:
                 self._audio_cb(*audio)
         elif cmd in (CMD_CONTROL_PAYLOAD, CMD_SET_PAYLOAD):
@@ -693,7 +744,7 @@ class P2PSession:
         on_video: Callable[[bytes], None],
         stop: asyncio.Event,
         first_frame_timeout: float = 15.0,
-        on_audio: Callable[[str, bytes], None] | None = None,
+        on_audio: Callable[[str, bytes, bytes | None], None] | None = None,
     ) -> None:
         """Push live video and audio frames to their callbacks until stop is set."""
         loop = asyncio.get_running_loop()

@@ -11,7 +11,7 @@ from homeassistant.components.ffmpeg import get_ffmpeg_manager
 from .api import EufyError
 from .const import DOMAIN
 from .entity import EufyEntity
-from .p2p import P2PError, has_idr, keyframe_to_jpeg, sniff_codec
+from .p2p import P2PError, has_idr, keyframe_to_jpeg, sniff_codec, wrap_aac_eld_latm
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -46,6 +46,8 @@ class LiveRelay:
         self._reset_cache = False
         self._video_codec = "h264"
         self._audio_codec: str | None = None
+        self._audio_config: bytes | None = None
+        self._audio_latm_started = False
         self._video_pending: list[bytes] = []
         self._audio_pending: list[bytes] = []
         self._video_ready: asyncio.Future | None = None
@@ -111,10 +113,20 @@ class LiveRelay:
             self._gop.append(data)
             self._gop_bytes += len(data)
 
-    def _on_audio(self, codec: str, data: bytes) -> None:
+    def _on_audio(self, codec: str, data: bytes, config: bytes | None = None) -> None:
+        if codec != self._audio_codec:
+            self._audio_config = config
+            self._audio_latm_started = False
+            _LOGGER.debug("Audio codec for %s: %s", self.sn, codec)
         self._audio_codec = codec
         if self._audio_ready and not self._audio_ready.done():
             self._audio_ready.set_result(codec)
+        if codec == "aac-eld":
+            if not self._audio_config:
+                _LOGGER.debug("AAC-ELD audio for %s has no AudioSpecificConfig", self.sn)
+                return
+            data = wrap_aac_eld_latm(data, self._audio_config, not self._audio_latm_started)
+            self._audio_latm_started = True
         if self._audio_writer and not self._audio_writer.is_closing():
             self._audio_writer.write(data)
         else:
@@ -160,20 +172,23 @@ class LiveRelay:
             "-thread_queue_size", "512", "-f", "hevc" if self._video_codec == "hevc" else "h264",
             "-i", "pipe:0",
         ]
-        if audio_codec in ("aac-lc", "g711a"):
+        if audio_codec in ("aac-lc", "aac-eld", "g711a"):
             self._audio_server = await asyncio.start_server(self._accept_audio, "127.0.0.1", 0)
             port = self._audio_server.sockets[0].getsockname()[1]
             args.extend(["-thread_queue_size", "512"])
             if audio_codec == "g711a":
-                args.extend(["-f", "alaw", "-ar", "8000", "-ac", "1"])
+                args.extend(["-f", "alaw", "-ar", "16000", "-ac", "1"])
+            elif audio_codec == "aac-eld":
+                args.extend(["-f", "latm"])
             else:
                 args.extend(["-f", "aac"])
             args.extend(["-i", f"tcp://127.0.0.1:{port}"])
         args.extend(["-map", "0:v:0"])
-        if audio_codec in ("aac-lc", "g711a"):
+        if audio_codec in ("aac-lc", "aac-eld", "g711a"):
             args.extend(["-map", "1:a:0", "-c:a", "copy" if audio_codec == "aac-lc" else "aac"])
         args.extend([
-            "-c:v", "copy", "-muxdelay", "0", "-muxpreload", "0", "-flush_packets", "1",
+            "-c:v", "copy", "-bsf:v", "dump_extra=freq=keyframe",
+            "-muxdelay", "0", "-muxpreload", "0", "-flush_packets", "1",
             "-mpegts_flags", "+resend_headers", "-f", "mpegts", "pipe:1",
         ])
         self._process = await asyncio.create_subprocess_exec(
@@ -244,6 +259,8 @@ class LiveRelay:
                 try:
                     self._video_pending, self._audio_pending = [], []
                     self._audio_codec = None
+                    self._audio_config = None
+                    self._audio_latm_started = False
                     loop = asyncio.get_running_loop()
                     self._video_ready = loop.create_future()
                     self._audio_ready = loop.create_future()
@@ -264,9 +281,6 @@ class LiveRelay:
                             )
                         except asyncio.TimeoutError:
                             pass
-                        if audio_codec == "aac-eld":
-                            _LOGGER.debug("Audio codec AAC-ELD is not supported by the FFmpeg relay for %s", self.sn)
-                            audio_codec = None
                         await self._start_muxer(audio_codec)
                         if self._audio_writer:
                             for frame in self._audio_pending:
@@ -312,8 +326,13 @@ class LiveRelay:
         if self._server:
             self._server.close()
             self._server = None
-        if self._task:
-            await asyncio.gather(self._task, return_exceptions=True)
+        task = self._task
+        if task:
+            # A stuck P2P session must not block unload, otherwise a reload never completes.
+            _, pending = await asyncio.wait((task,), timeout=5)
+            if pending:
+                task.cancel()
+                await asyncio.wait((task,), timeout=5)
 
 
 async def async_setup_entry(hass, entry, async_add_entities):

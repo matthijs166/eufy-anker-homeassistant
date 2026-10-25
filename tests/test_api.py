@@ -50,16 +50,36 @@ def test_decode_audio_rejects_unknown_or_empty_frames():
     assert p2p.decode_audio(bytes(16)) is None
 
 
+def test_decode_audio_frame_includes_aac_eld_config():
+    frame = bytearray(16) + b"audio"
+    frame[p2p.AUDIO_TYPE_OFFSET] = 7
+
+    assert p2p.decode_audio_frame(frame) == ("aac-eld", b"audio", bytes.fromhex("f8f03000"))
+
+
+def test_wrap_aac_eld_latm_emits_config_once_and_valid_loas_lengths():
+    config = p2p.AAC_ELD_AUDIO_SPECIFIC_CONFIG
+    first = p2p.wrap_aac_eld_latm(b"first-frame", config, include_config=True)
+    following = p2p.wrap_aac_eld_latm(b"next-frame", config, include_config=False)
+
+    assert first[0] == following[0] == 0x56
+    assert (first[1] & 0xE0) == (following[1] & 0xE0) == 0xE0
+    assert ((first[1] & 0x1F) << 8 | first[2]) == len(first) - 3
+    assert ((following[1] & 0x1F) << 8 | following[2]) == len(following) - 3
+    assert first[3] & 0x80 == 0
+    assert following[3] & 0x80 == 0x80
+
+
 def test_audio_frame_command_reaches_stream_callback():
     session = p2p.P2PSession("sn", "a-1-b", "account")
     received = []
-    session._audio_cb = lambda codec, data: received.append((codec, data))
+    session._audio_cb = lambda codec, data, config: received.append((codec, data, config))
     frame = bytearray(16) + b"audio"
     frame[p2p.AUDIO_TYPE_OFFSET] = 0
 
     session._handle_frame((p2p.CMD_AUDIO_FRAME, len(frame), 0, 0), frame)
 
-    assert received == [("aac-lc", b"audio")]
+    assert received == [("aac-lc", b"audio", None)]
 
 
 class FakeCloud:
