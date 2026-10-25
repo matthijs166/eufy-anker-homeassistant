@@ -24,7 +24,7 @@ Data is polled from the Eufy cloud every 30 seconds.
 
 1. Click the button above (or in HACS: *Custom repositories* → add this repo as type *Integration*).
 2. Download **Eufy Anker Cameras** in HACS and restart Home Assistant.
-3. Add the integration: [![Add integration](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=eufy_anker)
+3. Add the integration: [![Add integration](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=eufy)
 
 ## Setup
 
