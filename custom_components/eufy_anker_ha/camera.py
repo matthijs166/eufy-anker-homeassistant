@@ -19,6 +19,7 @@ SNAPSHOT_MAX_AGE_S = 10
 IDLE_STOP_S = 15
 MAX_GOP_BYTES = 8_000_000
 MAX_CLIENT_BUFFER = 4_000_000
+MAX_VIEWER_BACKLOG = 600_000
 RECONNECT_DELAY_S = 2
 AUDIO_START_WAIT_S = 3
 
@@ -38,6 +39,7 @@ class LiveRelay:
         self._stop = asyncio.Event()
         self._idle: asyncio.TimerHandle | None = None
         self._clients: set[asyncio.StreamWriter] = set()
+        self._waiting: set[asyncio.StreamWriter] = set()
         self._gop: list[bytes] = []
         self._gop_bytes = 0
         self._mux_cache = bytearray()
@@ -67,9 +69,11 @@ class LiveRelay:
         if self._idle:
             self._idle.cancel()
             self._idle = None
+        # A late joiner waits for the next keyframe instead of replaying an old GOP, which would lag the live edge.
         if self._mux_cache:
-            writer.write(self._mux_cache)
-        self._clients.add(writer)
+            self._waiting.add(writer)
+        else:
+            self._clients.add(writer)
         if self._task is None:
             self._stop.clear()
             self._task = asyncio.create_task(self._run())
@@ -80,8 +84,9 @@ class LiveRelay:
             pass
         finally:
             self._clients.discard(writer)
+            self._waiting.discard(writer)
             writer.close()
-            if not self._clients and self._task and not self._idle:
+            if not self._clients and not self._waiting and self._task and not self._idle:
                 self._idle = asyncio.get_running_loop().call_later(IDLE_STOP_S, self._stop.set)
 
     def _on_video(self, data: bytes) -> None:
@@ -128,7 +133,7 @@ class LiveRelay:
         return list(reversed(kept))
 
     def _send(self, writer: asyncio.StreamWriter, data: bytes) -> None:
-        if writer.transport.get_write_buffer_size() > MAX_CLIENT_BUFFER:
+        if writer.transport.get_write_buffer_size() > MAX_VIEWER_BACKLOG:
             writer.close()
             return
         writer.write(data)
@@ -192,6 +197,8 @@ class LiveRelay:
                 # Keep only the current GOP so new viewers start at the live edge.
                 self._reset_cache = False
                 self._mux_cache.clear()
+                self._clients |= self._waiting
+                self._waiting.clear()
             self._mux_cache.extend(chunk)
             if len(self._mux_cache) > MAX_GOP_BYTES:
                 del self._mux_cache[: len(self._mux_cache) - MAX_GOP_BYTES]
@@ -273,7 +280,7 @@ class LiveRelay:
                         await stream_task
                 except Exception as err:  # noqa: BLE001 - relay must survive any stream failure
                     _LOGGER.debug("Live stream of %s failed: %s", self.sn, err)
-                    if not self._clients:
+                    if not self._clients and not self._waiting:
                         break
                     await asyncio.sleep(RECONNECT_DELAY_S)
                 finally:
@@ -289,11 +296,18 @@ class LiveRelay:
         finally:
             self._task = None
 
+    async def async_halt(self) -> None:
+        """Drop all viewers and end the P2P session; a new viewer restarts it."""
+        self._stop.set()
+        for writer in list(self._clients | self._waiting):
+            writer.close()
+        self._gop, self._gop_bytes = [], 0
+
     async def async_close(self) -> None:
         self._stop.set()
         if self._idle:
             self._idle.cancel()
-        for writer in list(self._clients):
+        for writer in list(self._clients | self._waiting):
             writer.close()
         if self._server:
             self._server.close()
@@ -322,13 +336,26 @@ class EufyCamera(EufyEntity, Camera):
         self._snapshot: tuple[float, bytes] | None = None
         self._relay = LiveRelay(coordinator.api, self.info["device"], sn, ffmpeg)
 
-    async def stream_source(self) -> str:
+    @property
+    def _private(self) -> bool:
+        return bool(self.info.get("privacy"))
+
+    def _handle_coordinator_update(self) -> None:
+        if self._private:
+            self.hass.async_create_task(self._relay.async_halt())
+        super()._handle_coordinator_update()
+
+    async def stream_source(self) -> str | None:
+        if self._private:
+            return None
         return await self._relay.async_url()
 
     async def async_will_remove_from_hass(self) -> None:
         await self._relay.async_close()
 
     async def async_camera_image(self, width=None, height=None):
+        if self._private:
+            return None
         live = self._relay.keyframe
         if live:
             try:
