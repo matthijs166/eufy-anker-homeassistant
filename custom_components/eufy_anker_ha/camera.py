@@ -5,7 +5,7 @@ import asyncio
 import logging
 import time
 
-from homeassistant.components.camera import Camera
+from homeassistant.components.camera import Camera, CameraEntityFeature
 from homeassistant.components.ffmpeg import get_ffmpeg_manager
 
 from .api import EufyError
@@ -140,7 +140,7 @@ class EufyCamera(EufyEntity, Camera):
     """Live frame over P2P, falling back to the last stored event image."""
 
     _attr_name = None
-
+    _attr_supported_features = CameraEntityFeature.STREAM
     def __init__(self, coordinator, sn) -> None:
         EufyEntity.__init__(self, coordinator, sn)
         Camera.__init__(self)
