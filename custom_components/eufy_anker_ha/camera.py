@@ -41,6 +41,7 @@ class LiveRelay:
         self._gop: list[bytes] = []
         self._gop_bytes = 0
         self._mux_cache = bytearray()
+        self._reset_cache = False
         self._video_codec = "h264"
         self._audio_codec: str | None = None
         self._video_pending: list[bytes] = []
@@ -97,6 +98,7 @@ class LiveRelay:
             self.codec = self._video_codec
         if has_idr(data, self.codec):
             self._gop, self._gop_bytes = [data], len(data)
+            self._reset_cache = True
             return
         if not self._gop:
             return
@@ -148,7 +150,8 @@ class LiveRelay:
 
     async def _start_muxer(self, audio_codec: str | None) -> None:
         args = [
-            self._ffmpeg, "-hide_banner", "-loglevel", "error", "-fflags", "+genpts",
+            self._ffmpeg, "-hide_banner", "-loglevel", "error", "-fflags", "+genpts+nobuffer",
+            "-flags", "low_delay", "-probesize", "64k", "-analyzeduration", "500000",
             "-thread_queue_size", "512", "-f", "hevc" if self._video_codec == "hevc" else "h264",
             "-i", "pipe:0",
         ]
@@ -185,6 +188,10 @@ class LiveRelay:
         if not self._process or not self._process.stdout:
             return
         while chunk := await self._process.stdout.read(1316):
+            if self._reset_cache:
+                # Keep only the current GOP so new viewers start at the live edge.
+                self._reset_cache = False
+                self._mux_cache.clear()
             self._mux_cache.extend(chunk)
             if len(self._mux_cache) > MAX_GOP_BYTES:
                 del self._mux_cache[: len(self._mux_cache) - MAX_GOP_BYTES]
