@@ -682,6 +682,21 @@ class EufyApi:
         message = {"account_id": account_id, "cmd": cmd, "mChannel": device.get("device_channel") or 0, "mValue3": 0, "payload": payload}
         await self._push_to_device(device, message, CMD_SET_PAYLOAD)
 
+    async def open_live_session(self, device: dict[str, Any], timeout: float = 20.0):
+        """Connected P2P session ready for stream(); caller must close it."""
+        session = await self._open_p2p(device)
+        try:
+            await session.connect(timeout)
+            if await session.wait_gateway() and session.cipher_id:
+                account_id = (device.get("member") or {}).get("admin_user_id") or self._auth.get("user_id", "")
+                cipher = await self.get_cipher_key(session.cipher_id, account_id)
+                if cipher:
+                    session.set_cipher(cipher.get("private_key"), cipher.get("ecc_private_key"))
+        except BaseException:
+            await session.close()
+            raise
+        return session
+
     async def get_snapshot(self, device: dict[str, Any], ffmpeg: str = "ffmpeg", timeout: float = 20.0) -> bytes:
         """Fresh JPEG from the camera's live P2P stream."""
         session = await self._open_p2p(device)

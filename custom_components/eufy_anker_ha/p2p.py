@@ -636,30 +636,61 @@ class P2PSession:
 
         self._frame_cb = on_frame
         try:
-            try:
-                await asyncio.wait_for(self._gateway.wait(), 3.0)
-            except asyncio.TimeoutError:
-                _LOGGER.debug("p2p %s no gateway info reply, starting at level 1", self.sn)
-            deadline = loop.time() + timeout
-            self._send_start()
-            last_start = last_keepalive = loop.time()
-            while not result.done():
-                now = loop.time()
-                if now >= deadline:
-                    raise P2PError(f"no video keyframe from {self.sn} within {timeout:.0f}s ({len(frames)} frames seen)")
-                if self._unacked_starts and now - last_start >= LIVE_START_RETRANSMIT_S:
-                    for data, first in list(self._unacked_starts.values()):
-                        self._send_data(data)
-                    last_start = now
-                    oldest = min(first for _, first in self._unacked_starts.values())
-                    if time.monotonic() - oldest > LIVE_START_ACK_DEADLINE_S:
-                        self._unacked_starts.clear()
-                        self._send_start()
-                if now - last_keepalive >= KEEPALIVE_S:
-                    self._send_command(CMD_KEEPALIVE, self.channel)
-                    last_keepalive = now
-                await asyncio.sleep(0.05)
+            await self._live_loop(result.done, loop.time() + timeout, lambda: f"no video keyframe from {self.sn} within {timeout:.0f}s ({len(frames)} frames seen)")
             return result.result()
+        finally:
+            self._frame_cb = None
+            self._send_stop()
+
+    async def _live_loop(self, done: Callable[[], bool], deadline: float | None, timeout_msg: Callable[[], str]) -> None:
+        loop = asyncio.get_running_loop()
+        try:
+            await asyncio.wait_for(self._gateway.wait(), 3.0)
+        except asyncio.TimeoutError:
+            _LOGGER.debug("p2p %s no gateway info reply, starting at level 1", self.sn)
+        self._send_start()
+        last_start = last_keepalive = loop.time()
+        while not done():
+            now = loop.time()
+            if deadline is not None and now >= deadline:
+                raise P2PError(timeout_msg())
+            if self._closed:
+                raise P2PError(f"p2p session to {self.sn} closed")
+            if self._unacked_starts and now - last_start >= LIVE_START_RETRANSMIT_S:
+                for data, _first in list(self._unacked_starts.values()):
+                    self._send_data(data)
+                last_start = now
+                oldest = min(first for _, first in self._unacked_starts.values())
+                if time.monotonic() - oldest > LIVE_START_ACK_DEADLINE_S:
+                    self._unacked_starts.clear()
+                    self._send_start()
+            if now - last_keepalive >= KEEPALIVE_S:
+                self._send_command(CMD_KEEPALIVE, self.channel)
+                last_keepalive = now
+            await asyncio.sleep(0.05)
+
+    async def stream(self, on_video: Callable[[bytes], None], stop: asyncio.Event, first_frame_timeout: float = 15.0) -> None:
+        """Start live video and push each decrypted Annex-B access unit to on_video until stop is set."""
+        loop = asyncio.get_running_loop()
+        seen = False
+
+        def on_frame(_cmd: int, sign: int, payload: bytes) -> None:
+            nonlocal seen
+            data = self.decode_video(payload, sign)
+            if data:
+                seen = True
+                on_video(data)
+
+        first_deadline = loop.time() + first_frame_timeout
+
+        def done() -> bool:
+            if not seen and loop.time() >= first_deadline:
+                raise P2PError(f"no video from {self.sn} within {first_frame_timeout:.0f}s")
+            return stop.is_set()
+
+        self._frame_cb = on_frame
+        try:
+            await self._live_loop(done, None, lambda: "")
         finally:
             self._frame_cb = None
             self._send_stop()
