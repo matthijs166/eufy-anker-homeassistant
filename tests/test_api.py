@@ -264,13 +264,7 @@ async def test_ptz_default_position_uses_native_preset_command(monkeypatch, meth
     assert submitted == [
         (
             device,
-            {
-                "commandType": api_mod.PTZ_PRESET_COMMAND,
-                "value": json.dumps({
-                    "commandType": preset_command,
-                    "data": {"value": api_mod.DEFAULT_PTZ_PRESET},
-                }),
-            },
+            {"commandType": preset_command, "data": {"value": api_mod.DEFAULT_PTZ_PRESET}},
             api_mod.CMD_CONTROL_PAYLOAD,
         )
     ]

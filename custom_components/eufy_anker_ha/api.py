@@ -810,13 +810,7 @@ class EufyApi:
             raise ValueError("Device does not support PTZ presets")
         await self._push_to_device(
             device,
-            {
-                "commandType": PTZ_PRESET_COMMAND,
-                "value": json.dumps({
-                    "commandType": PTZ_SAVE_PRESET_COMMAND,
-                    "data": {"value": DEFAULT_PTZ_PRESET},
-                }),
-            },
+            {"commandType": PTZ_SAVE_PRESET_COMMAND, "data": {"value": DEFAULT_PTZ_PRESET}},
         )
 
     async def go_to_default_ptz_position(self, device: dict[str, Any]) -> None:
@@ -825,11 +819,5 @@ class EufyApi:
             raise ValueError("Device does not support PTZ presets")
         await self._push_to_device(
             device,
-            {
-                "commandType": PTZ_PRESET_COMMAND,
-                "value": json.dumps({
-                    "commandType": PTZ_GOTO_PRESET_COMMAND,
-                    "data": {"value": DEFAULT_PTZ_PRESET},
-                }),
-            },
+            {"commandType": PTZ_GOTO_PRESET_COMMAND, "data": {"value": DEFAULT_PTZ_PRESET}},
         )
