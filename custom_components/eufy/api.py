@@ -43,6 +43,9 @@ PHONE_MODELS = ("Pixel 8", "Pixel 7", "SM-S911B", "OnePlus 11", "Redmi Note 12")
 REGIONS = ("us-pr", "eu-pr")
 
 PARAM_PRIVACY_MODE = 99904
+# Params the camera itself reacts to (cloud-only 99904 is not pushed to it)
+PARAM_DEVS_SWITCH = 1035
+PARAM_PRIVACY_6250 = 6250
 KEY_TTL = 12 * 3600
 
 CODE_OK = 0
@@ -473,12 +476,18 @@ class EufyApi:
 
     async def set_privacy(self, device: dict[str, Any], enabled: bool) -> None:
         """Turn privacy mode on or off."""
+        present = {str(p.get("param_type")) for p in device.get("params") or []}
+        types = [PARAM_PRIVACY_MODE] + [
+            t for t in (PARAM_DEVS_SWITCH, PARAM_PRIVACY_6250) if str(t) in present
+        ]
+        value = "1" if enabled else "0"
         await self._authed(
             "security",
             "/v1/app/upload_devs_params",
             {
                 "device_sn": device["device_sn"],
                 "station_sn": device.get("station_sn", device["device_sn"]),
-                "params": [{"param_type": PARAM_PRIVACY_MODE, "param_value": "1" if enabled else "0"}],
+                "params": [{"param_type": t, "param_value": value} for t in types],
+                "transaction": str(int(time.time() * 1000)),
             },
         )
