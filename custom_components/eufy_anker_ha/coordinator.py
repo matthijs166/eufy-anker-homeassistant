@@ -71,6 +71,14 @@ class EufyCoordinator(DataUpdateCoordinator[dict]):
         """Move a camera one step in a cardinal direction."""
         await self.api.move_ptz(self.data[sn]["device"], direction)
 
+    async def async_save_default_ptz_position(self, sn: str) -> None:
+        """Save the camera's current position as its default PTZ preset."""
+        await self.api.save_default_ptz_position(self.data[sn]["device"])
+
+    async def async_go_to_default_ptz_position(self, sn: str) -> None:
+        """Move the camera to its default PTZ preset."""
+        await self.api.go_to_default_ptz_position(self.data[sn]["device"])
+
     async def _async_update_data(self) -> dict:
         self.vlog("SYNC start (interval=%s)", self.update_interval)
         try:

@@ -241,6 +241,57 @@ async def test_move_ptz_sends_direction_command(monkeypatch, direction, rotate_t
     ]
 
 
+@pytest.mark.parametrize(
+    ("method_name", "preset_command"),
+    [
+        ("save_default_ptz_position", api_mod.PTZ_SAVE_PRESET_COMMAND),
+        ("go_to_default_ptz_position", api_mod.PTZ_GOTO_PRESET_COMMAND),
+    ],
+)
+@pytest.mark.asyncio
+async def test_ptz_default_position_uses_native_preset_command(monkeypatch, method_name, preset_command):
+    api = api_mod.EufyApi(None, "me@example.com", "s3cret")
+    submitted = []
+
+    async def push_to_device(device, message, cmd_id=api_mod.CMD_CONTROL_PAYLOAD):
+        submitted.append((device, message, cmd_id))
+
+    monkeypatch.setattr(api, "_push_to_device", push_to_device)
+    device = {"device_sn": "T1", "device_type": 48}
+
+    await getattr(api, method_name)(device)
+
+    assert submitted == [
+        (
+            device,
+            {
+                "commandType": api_mod.PTZ_PRESET_COMMAND,
+                "value": json.dumps({
+                    "commandType": preset_command,
+                    "data": {"value": api_mod.DEFAULT_PTZ_PRESET},
+                }),
+            },
+            api_mod.CMD_CONTROL_PAYLOAD,
+        )
+    ]
+
+
+def test_supports_ptz_presets_only_for_supported_device_types():
+    assert api_mod.supports_ptz_presets({"device_type": 48})
+    assert api_mod.supports_ptz_presets({"device_type": "104"})
+    assert api_mod.supports_ptz({"device_type": 89})
+    assert not api_mod.supports_ptz_presets({"device_type": 31})
+    assert not api_mod.supports_ptz_presets({"device_model": "Indoor Cam Pan & Tilt"})
+
+
+@pytest.mark.asyncio
+async def test_ptz_default_position_rejects_unsupported_device():
+    api = api_mod.EufyApi(None, "me@example.com", "s3cret")
+
+    with pytest.raises(ValueError, match="does not support PTZ presets"):
+        await api.save_default_ptz_position({"device_sn": "T1", "device_type": 31})
+
+
 def test_supports_ptz_uses_reported_evidence_and_known_device_types():
     assert api_mod.supports_ptz({"params": [{"param_type": 6090, "param_value": "0"}]})
     assert api_mod.supports_ptz({"device_type": 31})

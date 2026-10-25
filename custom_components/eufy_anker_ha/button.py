@@ -7,7 +7,7 @@ import logging
 from homeassistant.components.button import ButtonDeviceClass, ButtonEntity
 from homeassistant.helpers.entity import EntityCategory
 
-from .api import supports_ptz
+from .api import supports_ptz, supports_ptz_presets
 from .const import DOMAIN
 from .describe import describe_device
 from .entity import EufyEntity
@@ -30,6 +30,8 @@ async def async_setup_entry(hass, entry, async_add_entities):
     for sn, info in coordinator.data.items():
         if supports_ptz(info["device"]):
             entities.extend(EufyPtzMove(coordinator, sn, direction) for direction in PTZ_DIRECTIONS)
+        if supports_ptz_presets(info["device"]):
+            entities.extend((EufySaveDefaultPosition(coordinator, sn), EufyGoToDefaultPosition(coordinator, sn)))
     async_add_entities(entities)
 
 
@@ -88,3 +90,33 @@ class EufyPtzMove(EufyEntity, ButtonEntity):
     async def async_press(self) -> None:
         self.coordinator.vlog("TRIGGER button ptz %s %s", self.sn, self.direction)
         await self.coordinator.async_move_ptz(self.sn, self.direction)
+
+
+class EufySaveDefaultPosition(EufyEntity, ButtonEntity):
+    """Save the current camera position as its default PTZ preset."""
+
+    _attr_name = "Save default position"
+    _attr_icon = "mdi:content-save"
+
+    def __init__(self, coordinator, sn) -> None:
+        super().__init__(coordinator, sn)
+        self._attr_unique_id = f"{sn}_ptz_save_default_position"
+
+    async def async_press(self) -> None:
+        self.coordinator.vlog("TRIGGER button ptz save default position %s", self.sn)
+        await self.coordinator.async_save_default_ptz_position(self.sn)
+
+
+class EufyGoToDefaultPosition(EufyEntity, ButtonEntity):
+    """Move the camera to its saved default PTZ preset."""
+
+    _attr_name = "Go to default position"
+    _attr_icon = "mdi:crosshairs-gps"
+
+    def __init__(self, coordinator, sn) -> None:
+        super().__init__(coordinator, sn)
+        self._attr_unique_id = f"{sn}_ptz_go_to_default_position"
+
+    async def async_press(self) -> None:
+        self.coordinator.vlog("TRIGGER button ptz go to default position %s", self.sn)
+        await self.coordinator.async_go_to_default_ptz_position(self.sn)

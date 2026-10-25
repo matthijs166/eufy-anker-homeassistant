@@ -77,7 +77,12 @@ PARAM_NIGHT_VISION = 1277
 PTZ_COMMAND = 6030
 PTZ_DIRECTIONS = {"left": 1, "right": 2, "up": 3, "down": 4}
 PTZ_EVIDENCE_PARAMS = {1029, 6090, 6091, 6092, 6210}
-PTZ_DEVICE_TYPES = {31, 35, 47, 48, 111, 10008, 10009, 10010, 10011}
+PTZ_PRESET_DEVICE_TYPES = {38, 47, 48, 87, 89, 98, 104, 105, 111, 10008, 10009, 10010, 10011}
+PTZ_DEVICE_TYPES = {31, 35, *PTZ_PRESET_DEVICE_TYPES}
+PTZ_PRESET_COMMAND = 1700
+PTZ_SAVE_PRESET_COMMAND = 6032
+PTZ_GOTO_PRESET_COMMAND = 6035
+DEFAULT_PTZ_PRESET = 0
 KEY_TTL = 12 * 3600
 
 CODE_OK = 0
@@ -197,6 +202,16 @@ def supports_ptz(device: dict[str, Any]) -> bool:
         or re.search(r"pan.{0,3}tilt|\bptz\b|\bpt\b|s3[45]0", model, re.IGNORECASE) is not None
         or model.upper() == "T8E00"
     )
+
+
+def supports_ptz_presets(device: dict[str, Any]) -> bool:
+    """Whether the device supports native PTZ preset save and recall commands."""
+    device_type = device.get("device_type", device.get("deviceType"))
+    try:
+        device_type = int(device_type)
+    except (TypeError, ValueError):
+        return False
+    return device_type in PTZ_PRESET_DEVICE_TYPES
 
 
 def _looks_like_html(text: str) -> bool:
@@ -788,3 +803,33 @@ class EufyApi:
             "data": {"cmd_type": 1, "rotate_type": PTZ_DIRECTIONS[direction], "zoom": 1.0},
         }
         await self._push_to_device(device, message)
+
+    async def save_default_ptz_position(self, device: dict[str, Any]) -> None:
+        """Save the current PTZ position to the camera's default preset slot."""
+        if not supports_ptz_presets(device):
+            raise ValueError("Device does not support PTZ presets")
+        await self._push_to_device(
+            device,
+            {
+                "commandType": PTZ_PRESET_COMMAND,
+                "value": json.dumps({
+                    "commandType": PTZ_SAVE_PRESET_COMMAND,
+                    "data": {"value": DEFAULT_PTZ_PRESET},
+                }),
+            },
+        )
+
+    async def go_to_default_ptz_position(self, device: dict[str, Any]) -> None:
+        """Move the camera to its saved default preset position."""
+        if not supports_ptz_presets(device):
+            raise ValueError("Device does not support PTZ presets")
+        await self._push_to_device(
+            device,
+            {
+                "commandType": PTZ_PRESET_COMMAND,
+                "value": json.dumps({
+                    "commandType": PTZ_GOTO_PRESET_COMMAND,
+                    "data": {"value": DEFAULT_PTZ_PRESET},
+                }),
+            },
+        )
