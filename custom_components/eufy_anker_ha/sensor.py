@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
-from homeassistant.const import UnitOfSignalStrength
+from homeassistant.const import SIGNAL_STRENGTH_DECIBELS_MILLIWATT
 
 from .const import DOMAIN
 from .entity import EufyEntity
@@ -40,7 +40,7 @@ class EufyWifiRssi(EufyEntity, SensorEntity):
 
     _attr_name = "Wi-Fi signal strength"
     _attr_device_class = SensorDeviceClass.SIGNAL_STRENGTH
-    _attr_native_unit_of_measurement = UnitOfSignalStrength.DECIBEL_MILLIWATT
+    _attr_native_unit_of_measurement = SIGNAL_STRENGTH_DECIBELS_MILLIWATT
 
     def __init__(self, coordinator, sn) -> None:
         super().__init__(coordinator, sn)
