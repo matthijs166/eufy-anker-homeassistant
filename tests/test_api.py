@@ -224,7 +224,7 @@ async def test_move_ptz_sends_direction_command(monkeypatch, direction, rotate_t
     api = api_mod.EufyApi(None, "me@example.com", "s3cret")
     submitted = []
 
-    async def push_to_device(device, message, cmd_id):
+    async def push_to_device(device, message, cmd_id=api_mod.CMD_CONTROL_PAYLOAD):
         submitted.append((device, message, cmd_id))
 
     monkeypatch.setattr(api, "_push_to_device", push_to_device)

@@ -193,7 +193,7 @@ def supports_ptz(device: dict[str, Any]) -> bool:
     return (
         bool(params & PTZ_EVIDENCE_PARAMS)
         or device_type in PTZ_DEVICE_TYPES
-        or re.search(r"pan.?tilt|\bptz\b|\bpt\b|s3[45]0", model, re.IGNORECASE) is not None
+        or re.search(r"pan.{0,3}tilt|\bptz\b|\bpt\b|s3[45]0", model, re.IGNORECASE) is not None
         or model.upper() == "T8E00"
     )
 

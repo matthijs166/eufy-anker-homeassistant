@@ -119,8 +119,8 @@ class EufyCoordinator(DataUpdateCoordinator[dict]):
                     json.dumps(redact(dev), default=str, sort_keys=True),
                 )
             self.vlog(
-                "SYNC %s power=%s privacy=%s events=%d last_event=%s image=%s params=%s",
-                sn, power, privacy, len(mine), data[sn]["last_event"], data[sn]["image_url"], dev.get("params"),
+                "SYNC %s privacy=%s events=%d last_event=%s image=%s params=%s",
+                sn, privacy, len(mine), data[sn]["last_event"], data[sn]["image_url"], dev.get("params"),
             )
         self.vlog("SYNC done: %d devices on account, %d events, %d selected", len(devices), len(events), len(data))
         return data
