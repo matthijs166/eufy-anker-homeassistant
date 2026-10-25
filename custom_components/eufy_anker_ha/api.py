@@ -13,6 +13,7 @@ Login flow (``mega-client.ts`` in the SDK):
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -678,7 +679,7 @@ class EufyApi:
                 code = await session.send_control(message, cmd_id)
             finally:
                 await session.close()
-        except (P2PError, EufyApiError, ValueError, OSError) as err:
+        except (P2PError, EufyError, ValueError, OSError) as err:
             _LOGGER.warning("Could not apply setting on camera %s over P2P: %s", sn, err)
             return None
         self._vlog("p2p push %s cmd=%s msg=%s result=%s", sn, cmd_id, message, code)
@@ -731,15 +732,22 @@ class EufyApi:
 
     async def set_privacy(self, device: dict[str, Any], enabled: bool) -> None:
         """Turn privacy mode on or off (writes 99904, plus 6250 when the device has it)."""
-        present = {str(p.get("param_type")) for p in device.get("params") or []}
-        if str(PARAM_PRIVACY_6250) not in present:
-            fresh_params = await self.get_device_params(device["device_sn"])
-            present.update(str(p.get("param_type")) for p in fresh_params or [])
-        types = [PARAM_PRIVACY_MODE] + ([PARAM_PRIVACY_6250] if str(PARAM_PRIVACY_6250) in present else [])
-        value = "1" if enabled else "0"
-        self._vlog("set_privacy %s -> %s params=%s", device.get("device_sn"), value, types)
-        await self._push_setting(device, PARAM_PRIVACY_6250, {"switch": int(enabled)})
-        res = await self._authed(
+        push = asyncio.create_task(self._push_setting(device, PARAM_PRIVACY_6250, {"switch": int(enabled)}))
+        try:
+            present = {str(p.get("param_type")) for p in device.get("params") or []}
+            if str(PARAM_PRIVACY_6250) not in present:
+                fresh_params = await self.get_device_params(device["device_sn"])
+                present.update(str(p.get("param_type")) for p in fresh_params or [])
+            types = [PARAM_PRIVACY_MODE] + ([PARAM_PRIVACY_6250] if str(PARAM_PRIVACY_6250) in present else [])
+            value = "1" if enabled else "0"
+            self._vlog("set_privacy %s -> %s params=%s", device.get("device_sn"), value, types)
+            res = await self._upload_privacy(device, types, value)
+        finally:
+            await push
+        self._vlog("set_privacy %s result=%s", device.get("device_sn"), _fmt(res))
+
+    async def _upload_privacy(self, device: dict[str, Any], types: list, value: str):
+        return await self._authed(
             "security",
             "/v1/app/upload_devs_params",
             {
@@ -749,22 +757,26 @@ class EufyApi:
                 "transaction": str(int(time.time() * 1000)),
             },
         )
-        self._vlog("set_privacy %s result=%s", device.get("device_sn"), _fmt(res))
 
     async def set_night_vision(self, device: dict[str, Any], mode: int) -> None:
         """Set night vision type (param 1277: 0 off, 1 auto, 3 on)."""
         self._vlog("set_night_vision %s -> %s", device.get("device_sn"), mode)
-        await self._push_setting(device, PARAM_NIGHT_VISION, {"channel": device.get("device_channel") or 0, "night_sion": mode})
-        res = await self._authed(
-            "security",
-            "/v1/app/upload_devs_params",
-            {
-                "device_sn": device["device_sn"],
-                "station_sn": device.get("station_sn", device["device_sn"]),
-                "params": [{"param_type": PARAM_NIGHT_VISION, "param_value": str(mode)}],
-                "transaction": str(int(time.time() * 1000)),
-            },
+        push = asyncio.create_task(
+            self._push_setting(device, PARAM_NIGHT_VISION, {"channel": device.get("device_channel") or 0, "night_sion": mode})
         )
+        try:
+            res = await self._authed(
+                "security",
+                "/v1/app/upload_devs_params",
+                {
+                    "device_sn": device["device_sn"],
+                    "station_sn": device.get("station_sn", device["device_sn"]),
+                    "params": [{"param_type": PARAM_NIGHT_VISION, "param_value": str(mode)}],
+                    "transaction": str(int(time.time() * 1000)),
+                },
+            )
+        finally:
+            await push
         self._vlog("set_night_vision %s result=%s", device.get("device_sn"), _fmt(res))
 
     async def move_ptz(self, device: dict[str, Any], direction: str) -> None:

@@ -264,7 +264,7 @@ class LiveRelay:
                         if self._output_task in completed and not self._stop.is_set():
                             raise P2PError(f"FFmpeg relay for {self.sn} stopped unexpectedly")
                         await stream_task
-                except (P2PError, EufyError, OSError) as err:
+                except Exception as err:  # noqa: BLE001 - relay must survive any stream failure
                     _LOGGER.debug("Live stream of %s failed: %s", self.sn, err)
                     if not self._clients:
                         break

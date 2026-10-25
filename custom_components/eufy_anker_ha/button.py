@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 
-from homeassistant.components.button import ButtonEntity
+from homeassistant.components.button import ButtonDeviceClass, ButtonEntity
 from homeassistant.helpers.entity import EntityCategory
 
 from .api import supports_ptz
@@ -26,6 +26,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = hass.data[DOMAIN][entry.entry_id]
     coordinator.vlog("button platform setup: %s", list(coordinator.data))
     entities = [EufyLogInfo(coordinator, sn) for sn in coordinator.data]
+    entities.extend(EufyRestart(coordinator, sn, entry.entry_id) for sn in coordinator.data)
     for sn, info in coordinator.data.items():
         if supports_ptz(info["device"]):
             entities.extend(EufyPtzMove(coordinator, sn, direction) for direction in PTZ_DIRECTIONS)
@@ -51,6 +52,27 @@ class EufyLogInfo(EufyEntity, ButtonEntity):
         _LOGGER.warning(
             "Eufy device info for %s:\n%s", self.sn, json.dumps(dump, indent=2, default=str, sort_keys=True)
         )
+
+
+class EufyRestart(EufyEntity, ButtonEntity):
+    """Reload the whole integration (reconnects the cloud session and live streams)."""
+
+    _attr_name = "Restart integration"
+    _attr_device_class = ButtonDeviceClass.RESTART
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(self, coordinator, sn, entry_id: str) -> None:
+        super().__init__(coordinator, sn)
+        self._entry_id = entry_id
+        self._attr_unique_id = f"{sn}_restart"
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    async def async_press(self) -> None:
+        self.coordinator.vlog("TRIGGER button restart %s", self.sn)
+        self.hass.async_create_task(self.hass.config_entries.async_reload(self._entry_id))
 
 
 class EufyPtzMove(EufyEntity, ButtonEntity):

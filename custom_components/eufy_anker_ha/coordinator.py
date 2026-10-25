@@ -38,25 +38,34 @@ class EufyCoordinator(DataUpdateCoordinator[dict]):
         """Write privacy mode to the cloud, show it optimistically and verify on refresh."""
         device = self.data[sn]["device"]
         self.vlog("ACTION privacy %s -> %s (was %s)", sn, enabled, self.data[sn]["privacy"])
+        previous = self.data[sn]["privacy"]
+        self.data[sn]["privacy"] = enabled
+        self.async_update_listeners()
         try:
             await self.api.set_privacy(device, enabled)
         except EufyError as err:
             _LOGGER.error("Setting privacy mode for %s failed: %s", sn, err)
+            self.data[sn]["privacy"] = previous
+            self.async_update_listeners()
             raise
         self._pending_privacy[sn] = (enabled, time.time() + PENDING_TTL)
-        self.data[sn]["privacy"] = enabled
-        self.async_update_listeners()
-        await self.async_request_refresh()
+        self.hass.async_create_task(self.async_request_refresh())
 
     async def async_set_night_vision(self, sn: str, mode: int) -> None:
         """Write night vision to the cloud and show it optimistically until refreshed."""
         device = self.data[sn]["device"]
-        await self.api.set_night_vision(device, mode)
         value = str(mode)
-        self._pending_night_vision[sn] = (value, time.time() + PENDING_TTL)
+        previous = self.data[sn]["night_vision"]
         self.data[sn]["night_vision"] = value
         self.async_update_listeners()
-        await self.async_request_refresh()
+        try:
+            await self.api.set_night_vision(device, mode)
+        except EufyError:
+            self.data[sn]["night_vision"] = previous
+            self.async_update_listeners()
+            raise
+        self._pending_night_vision[sn] = (value, time.time() + PENDING_TTL)
+        self.hass.async_create_task(self.async_request_refresh())
 
     async def async_move_ptz(self, sn: str, direction: str) -> None:
         """Move a camera one step in a cardinal direction."""
@@ -70,6 +79,9 @@ class EufyCoordinator(DataUpdateCoordinator[dict]):
         except EufyError as err:
             _LOGGER.warning("Eufy cloud sync failed: %s", err)
             raise UpdateFailed(str(err)) from err
+        except Exception as err:  # noqa: BLE001 - never let an unexpected error kill the integration
+            _LOGGER.exception("Unexpected error during Eufy cloud sync")
+            raise UpdateFailed(f"{type(err).__name__}: {err}") from err
         data: dict = {}
         for dev in devices:
             sn = dev["device_sn"]
