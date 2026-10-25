@@ -75,6 +75,7 @@ PARAM_PRIVACY_6250 = 6250
 # Camera power (CameraActions.on/off in eufy-sdk). Disable bit by default (on = 0);
 # enable bit (on = 1) for the floodlight cams below.
 PARAM_CAMERA_POWER = 1035
+PARAM_NIGHT_VISION = 1277
 ENABLE_BIT_MODELS = ("T8422", "T8424")
 KEY_TTL = 12 * 3600
 
@@ -695,3 +696,18 @@ class EufyApi:
             },
         )
         self._vlog("set_camera_power %s result=%s", device.get("device_sn"), _fmt(res))
+
+    async def set_night_vision(self, device: dict[str, Any], mode: int) -> None:
+        """Set night vision type (param 1277: 0 off, 1 auto, 3 on)."""
+        self._vlog("set_night_vision %s -> %s", device.get("device_sn"), mode)
+        res = await self._authed(
+            "security",
+            "/v1/app/upload_devs_params",
+            {
+                "device_sn": device["device_sn"],
+                "station_sn": device.get("station_sn", device["device_sn"]),
+                "params": [{"param_type": PARAM_NIGHT_VISION, "param_value": str(mode)}],
+                "transaction": str(int(time.time() * 1000)),
+            },
+        )
+        self._vlog("set_night_vision %s result=%s", device.get("device_sn"), _fmt(res))

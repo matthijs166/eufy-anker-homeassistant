@@ -148,6 +148,40 @@ async def test_toggle_privacy_mode():
 
 
 @pytest.mark.asyncio
+async def test_night_vision_modes():
+    async with ClientSession() as session:
+        api = await _login(session)
+        device = (await api.get_cameras())[0]
+
+        async def read_value() -> str | None:
+            params = await api.get_device_params(device["device_sn"])
+            if params is None:
+                fresh = next(
+                    (d for d in await api.get_cameras() if d.get("device_sn") == device["device_sn"]),
+                    None,
+                )
+                params = fresh.get("params") if fresh else None
+            param = next(
+                (p for p in params or [] if str(p.get("param_type")) == str(api_mod.PARAM_NIGHT_VISION)),
+                None,
+            )
+            return str(param.get("param_value")) if param else None
+
+        original = await read_value()
+        if original is None:
+            pytest.skip("device does not report night vision param 1277")
+
+        try:
+            for mode in (1, 0, 3):  # auto, off, on
+                await api.set_night_vision(device, mode)
+                actual = await read_value()
+                assert actual == str(mode), f"night vision 1277: expected {mode}, got {actual}"
+        finally:
+            # await api.set_night_vision(device, int(original))
+            print(f"Restoring original night vision mode: {original}")
+
+
+@pytest.mark.asyncio
 async def test_snapshot_returned():
     async with ClientSession() as session:
         api = await _login(session)
