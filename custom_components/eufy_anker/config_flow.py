@@ -70,6 +70,7 @@ class EufyConfigFlow(ConfigFlow, domain=DOMAIN):
             self._abort_if_unique_id_configured()
             self._api = EufyApi(async_get_clientsession(self.hass), user_input[CONF_EMAIL], user_input[CONF_PASSWORD],
                 debug=user_input.get(CONF_DEBUG, False),
+                country=self.hass.config.country or "US",
             )
             if result := await self._try_login("user", errors):
                 return result
