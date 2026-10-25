@@ -152,15 +152,7 @@ async def test_snapshot_returned():
     async with ClientSession() as session:
         api = await _login(session)
         device = (await api.get_cameras())[0]
-        device_events = [
-            event for event in await api.get_events()
-            if event.get("device_sn") == device["device_sn"]
-        ]
-        latest_event = max(device_events, key=lambda event: event.get("create_time", 0), default=None)
-        url = (latest_event or {}).get("pic_url") or device.get("cover_path")
-        if not url:
-            pytest.skip("device has no snapshot URL in recent events or cover_path")
-        image = await api.get_image(url)
+        image = await api.get_snapshot(device)
         assert image, "no image bytes returned"
         print(f"\nSNAPSHOT: {len(image)} bytes, header={image[:4]!r}")
         assert image[:2] == b"\xff\xd8" or image[:4] == b"\x89PNG", "not a JPEG/PNG"

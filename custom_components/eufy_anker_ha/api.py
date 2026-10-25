@@ -22,6 +22,7 @@ from typing import Any
 
 from aiohttp import ClientError, ClientSession
 
+from .p2p import P2PError, P2PSession, decode_cloud_ips, keyframe_to_jpeg
 from .crypto import (
     EUFYLIFE_LOCAL_KEY_HEX,
     MEGA_LOCAL_KEY_HEX,
@@ -599,6 +600,52 @@ class EufyApi:
         async with self._session.get(url) as resp:
             self._vlog("GET image %s -> HTTP %s", url, resp.status)
             return await resp.read() if resp.status == 200 else None
+
+    async def get_dsk_key(self, device_sn: str) -> str | None:
+        """Per-station key the PPCS cloud lookup needs."""
+        data = await self._authed(
+            "mega",
+            "/app/devicerelation/get_dsk_keys",
+            {
+                "device_dsks": [{"invalid_dsk": "", "device_sn": device_sn, "category": "eufy_security"}],
+                "invalid_dsks": {device_sn: ""},
+                "station_sns": [device_sn],
+            },
+            "devicerelation",
+        )
+        for entry in (data or {}).get("device_dsks") or []:
+            if entry.get("device_sn") == device_sn:
+                return entry.get("dsk_key")
+        return None
+
+    async def get_snapshot(self, device: dict[str, Any], ffmpeg: str = "ffmpeg", timeout: float = 20.0) -> bytes:
+        """Fresh JPEG from the camera's live P2P stream."""
+        did = device.get("p2p_did")
+        if not did:
+            raise P2PError(f"{device.get('device_sn')} has no p2p_did")
+        sn = device["device_sn"]
+        try:
+            dsk = await self.get_dsk_key(sn)
+        except EufyApiError as err:
+            _LOGGER.debug("get_dsk_keys failed, using local lookup only: %s", err)
+            dsk = None
+        conn = device.get("p2p_conn") or device.get("app_conn")
+        lan = next(
+            (p.get("param_value") for p in device.get("params") or [] if str(p.get("param_type")) == "1176"),
+            None,
+        ) or device.get("ip_addr") or None
+        account_id = (device.get("member") or {}).get("admin_user_id") or self._auth.get("user_id", "")
+        session = P2PSession(
+            sn, did, account_id,
+            cloud_addrs=decode_cloud_ips(conn) if conn else None,
+            dsk_key=dsk, local_addr=lan, channel=device.get("device_channel") or 0,
+        )
+        try:
+            await session.connect(timeout)
+            codec, annexb = await session.capture_keyframe(timeout)
+        finally:
+            await session.close()
+        return await keyframe_to_jpeg(codec, annexb, ffmpeg)
 
     async def get_device_params(self, device_sn: str) -> list[dict[str, Any]] | None:
         """Fresh param list of one device (owner-only endpoint; None when unavailable)."""

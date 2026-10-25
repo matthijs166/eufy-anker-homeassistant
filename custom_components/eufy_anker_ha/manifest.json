@@ -3,6 +3,7 @@
   "name": "Eufy Anker Cameras",
   "codeowners": ["@matthijs166"],
   "config_flow": true,
+  "dependencies": ["ffmpeg"],
   "documentation": "https://github.com/matthijs166/eufy-anker-homeassistant",
   "issue_tracker": "https://github.com/matthijs166/eufy-anker-homeassistant/issues",
   "integration_type": "hub",
