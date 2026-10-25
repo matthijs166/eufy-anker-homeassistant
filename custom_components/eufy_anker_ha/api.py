@@ -22,7 +22,7 @@ from typing import Any
 
 from aiohttp import ClientError, ClientSession
 
-from .p2p import P2PError, P2PSession, decode_cloud_ips, keyframe_to_jpeg
+from .p2p import CMD_CONTROL_PAYLOAD, CMD_SET_PAYLOAD, P2PError, P2PSession, decode_cloud_ips, keyframe_to_jpeg
 from .crypto import (
     EUFYLIFE_LOCAL_KEY_HEX,
     MEGA_LOCAL_KEY_HEX,
@@ -619,8 +619,7 @@ class EufyApi:
                 return entry.get("dsk_key")
         return None
 
-    async def get_snapshot(self, device: dict[str, Any], ffmpeg: str = "ffmpeg", timeout: float = 20.0) -> bytes:
-        """Fresh JPEG from the camera's live P2P stream."""
+    async def _open_p2p(self, device: dict[str, Any]) -> P2PSession:
         did = device.get("p2p_did")
         if not did:
             raise P2PError(f"{device.get('device_sn')} has no p2p_did")
@@ -636,11 +635,56 @@ class EufyApi:
             None,
         ) or device.get("ip_addr") or None
         account_id = (device.get("member") or {}).get("admin_user_id") or self._auth.get("user_id", "")
-        session = P2PSession(
+        return P2PSession(
             sn, did, account_id,
             cloud_addrs=decode_cloud_ips(conn) if conn else None,
             dsk_key=dsk, local_addr=lan, channel=device.get("device_channel") or 0,
         )
+
+    async def get_cipher_key(self, cipher_id: int, user_id: str) -> dict[str, Any] | None:
+        """Cloud-held key material (RSA and/or ECC) the camera's level-2 session key is sealed to."""
+        data = await self._authed(
+            "security",
+            "/v1/app/cipher/get_ciphers",
+            {"cipher_ids": [cipher_id], "user_id": user_id, "transaction": str(int(time.time() * 1000))},
+        )
+        items = data if isinstance(data, list) else (data or {}).get("ciphers") or []
+        return next((item for item in items if item.get("cipher_id") == cipher_id), None)
+
+    async def _push_to_device(
+        self, device: dict[str, Any], message: dict[str, Any], cmd_id: int = CMD_CONTROL_PAYLOAD
+    ) -> int | None:
+        """Apply a setting on the camera itself; the cloud write alone is not picked up by the device."""
+        sn = device.get("device_sn")
+        try:
+            session = await self._open_p2p(device)
+            try:
+                await session.connect(20.0)
+                if await session.wait_gateway() and session.cipher_id:
+                    account_id = (device.get("member") or {}).get("admin_user_id") or self._auth.get("user_id", "")
+                    cipher = await self.get_cipher_key(session.cipher_id, account_id)
+                    if cipher:
+                        session.set_cipher(cipher.get("private_key"), cipher.get("ecc_private_key"))
+                code = await session.send_control(message, cmd_id)
+            finally:
+                await session.close()
+        except (P2PError, EufyApiError, ValueError, OSError) as err:
+            _LOGGER.warning("Could not apply setting on camera %s over P2P: %s", sn, err)
+            return None
+        self._vlog("p2p push %s cmd=%s msg=%s result=%s", sn, cmd_id, message, code)
+        if code not in (0, None):
+            _LOGGER.warning("Camera %s rejected setting %s (code %s)", sn, message, code)
+        return code
+
+    async def _push_setting(self, device: dict[str, Any], cmd: int, payload: dict[str, Any]) -> None:
+        """Wrapped CMD_SET_PAYLOAD envelope the Eufy app uses for per-device settings."""
+        account_id = (device.get("member") or {}).get("admin_user_id") or self._auth.get("user_id", "")
+        message = {"account_id": account_id, "cmd": cmd, "mChannel": device.get("device_channel") or 0, "mValue3": 0, "payload": payload}
+        await self._push_to_device(device, message, CMD_SET_PAYLOAD)
+
+    async def get_snapshot(self, device: dict[str, Any], ffmpeg: str = "ffmpeg", timeout: float = 20.0) -> bytes:
+        """Fresh JPEG from the camera's live P2P stream."""
+        session = await self._open_p2p(device)
         try:
             await session.connect(timeout)
             codec, annexb = await session.capture_keyframe(timeout)
@@ -669,6 +713,7 @@ class EufyApi:
         types = [PARAM_PRIVACY_MODE] + ([PARAM_PRIVACY_6250] if str(PARAM_PRIVACY_6250) in present else [])
         value = "1" if enabled else "0"
         self._vlog("set_privacy %s -> %s params=%s", device.get("device_sn"), value, types)
+        await self._push_setting(device, PARAM_PRIVACY_6250, {"switch": int(enabled)})
         res = await self._authed(
             "security",
             "/v1/app/upload_devs_params",
@@ -700,6 +745,7 @@ class EufyApi:
     async def set_night_vision(self, device: dict[str, Any], mode: int) -> None:
         """Set night vision type (param 1277: 0 off, 1 auto, 3 on)."""
         self._vlog("set_night_vision %s -> %s", device.get("device_sn"), mode)
+        await self._push_setting(device, PARAM_NIGHT_VISION, {"channel": device.get("device_channel") or 0, "night_sion": mode})
         res = await self._authed(
             "security",
             "/v1/app/upload_devs_params",

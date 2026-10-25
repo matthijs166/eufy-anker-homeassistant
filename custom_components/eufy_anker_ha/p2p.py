@@ -6,6 +6,9 @@ own-session camera path is implemented (level-1 / clear control seal, no relay, 
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import hmac
 import json
 import logging
 import socket
@@ -13,7 +16,8 @@ import struct
 import time
 from typing import Any, Callable
 
-from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 _LOGGER = logging.getLogger(__name__)
@@ -47,6 +51,7 @@ DT_DATA, DT_VIDEO = 0, 1
 
 CMD_GATEWAYINFO = 1100
 CMD_CONTROL_PAYLOAD = 1700
+CMD_SET_PAYLOAD = 1350
 CMD_START_LIVE = 1000
 CMD_STOP_MEDIA = 1004
 CMD_KEEPALIVE = 1139
@@ -168,6 +173,26 @@ def has_idr(data: bytes, codec: str) -> bool:
     return False
 
 
+def _ecdh_session_key(envelope: bytes, ecc_private_hex: str) -> bytes:
+    """Open the camera's ECIES envelope (device pubkey + iv + ciphertext + hmac) into the 16-byte session key."""
+    pub_len = 65 if envelope[:1] == b"\x04" else 33
+    priv = ec.derive_private_key(int(ecc_private_hex, 16), ec.SECP256R1())
+    peer = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), envelope[:pub_len])
+    shared = priv.exchange(ec.ECDH(), peer)
+    rest = envelope[pub_len:]
+    if len(rest) < 64:
+        return shared[:16]
+    static = b"ECIES"
+    tmp, derived = static, b""
+    for _ in range(2):
+        tmp = hmac.new(shared, tmp, hashlib.sha256).digest()
+        derived += hmac.new(shared, tmp + static, hashlib.sha256).digest()
+    iv, cipher_text = rest[:16], rest[16:len(rest) - 32]
+    cipher_text = cipher_text[:len(cipher_text) // 16 * 16]
+    dec = Cipher(algorithms.AES(derived[:16]), modes.CBC(iv)).decryptor()
+    return (dec.update(cipher_text) + dec.finalize())[:16]
+
+
 class _Protocol(asyncio.DatagramProtocol):
     def __init__(self, session: "P2PSession") -> None:
         self._s = session
@@ -221,6 +246,11 @@ class P2PSession:
         self._reorder_timers: dict[int, asyncio.TimerHandle] = {}
         self._pending: dict[int, dict[str, Any]] = {}
         self._frame_cb: Callable[[int, int, bytes], None] | None = None
+        self._reply = asyncio.Event()
+        self._reply_code: int | None = None
+        self._key_blob = b""
+        self._key_raw = b""
+        self._p2p_key: bytes | None = None
 
     # -- connection -----------------------------------------------------------
 
@@ -434,10 +464,20 @@ class P2PSession:
                 data = _ecb(data, self._l1, False)
             if len(data) >= 2 and self._cipher_id is None:
                 self._cipher_id = struct.unpack_from("<H", data, 0)[0]
+                self._key_raw = data[4:]
+                self._key_blob = data[4:].split(b"\0", 1)[0]
                 _LOGGER.debug("p2p %s gateway cipher_id=%s", self.sn, self._cipher_id)
                 self._gateway.set()
         elif cmd == CMD_VIDEO_FRAME and self._frame_cb:
             self._frame_cb(cmd, sign, payload)
+        elif cmd in (CMD_CONTROL_PAYLOAD, CMD_SET_PAYLOAD):
+            data = payload
+            if sign > 0 and data and len(data) % 16 == 0:
+                data = _ecb(data, self._p2p_key if sign == 2 and self._p2p_key else self._l1, False)
+            _LOGGER.debug("p2p %s control reply (cmd %s): %s", self.sn, cmd, data.hex())
+            if len(data) >= 4:
+                self._reply_code = struct.unpack_from("<i", data, 0)[0]
+                self._reply.set()
 
     # -- outbound -------------------------------------------------------------
 
@@ -481,6 +521,69 @@ class P2PSession:
         data = _command_header(seq, CMD_CONTROL_PAYLOAD) + payload
         self._unacked_starts[seq] = (data, time.monotonic())
         self._send_data(data)
+
+    @property
+    def cipher_id(self) -> int | None:
+        return self._cipher_id
+
+    async def wait_gateway(self, timeout: float = 5.0) -> bool:
+        try:
+            await asyncio.wait_for(self._gateway.wait(), timeout)
+        except asyncio.TimeoutError:
+            return False
+        return True
+
+    def set_cipher(self, rsa_key: str | None, ecc_key: str | None) -> None:
+        """Derive the level-2 session key from the cloud-held cipher (RSA first, else ECDH)."""
+        if rsa_key:
+            try:
+                body = "".join(line for line in rsa_key.splitlines() if not line.startswith("-----")).strip()
+                key = serialization.load_der_private_key(base64.b64decode(body), password=None)
+                self._p2p_key = key.decrypt(self._key_blob, padding.PKCS1v15())[:16]
+                return
+            except ValueError:
+                _LOGGER.debug("p2p %s RSA cipher unusable, trying ECDH", self.sn)
+        if ecc_key:
+            self._p2p_key = _ecdh_session_key(self._key_raw, ecc_key)
+
+    def _send_control(self, cmd_id: int, message: dict[str, Any]) -> int:
+        body = json.dumps(message, separators=(",", ":")).encode()
+        if self._p2p_key:
+            payload = _raw_payload(_ecb(_zero_pad(body), self._p2p_key, True), self.channel, 2, (1, 0), 0)
+        elif self._cipher_id == 0:
+            self._clear_count = (self._clear_count % 0xFF) + 1
+            payload = _raw_payload(body, self.channel, 0, (1, self._clear_count), 0)
+        else:
+            enc = _ecb(_zero_pad(body), self._l1, True)
+            payload = _raw_payload(enc, self.channel, 1, (1, 0), FRAME_TYPE_L1)
+        seq = self._next_seq()
+        frame = _command_header(seq, cmd_id) + payload
+        self._unacked_starts[seq] = (frame, time.monotonic())
+        self._send_data(frame)
+        return seq
+
+    async def send_control(self, message: dict[str, Any], cmd_id: int = CMD_CONTROL_PAYLOAD, timeout: float = 8.0) -> int | None:
+        """Send a device setting command; returns the camera's result code (0 = accepted) or None if it sent none."""
+        try:
+            await asyncio.wait_for(self._gateway.wait(), 3.0)
+        except asyncio.TimeoutError:
+            _LOGGER.debug("p2p %s no gateway info reply, sending at level 1", self.sn)
+        self._reply.clear()
+        self._reply_code = None
+        seq = self._send_control(cmd_id, message)
+        deadline = time.monotonic() + timeout
+        while seq in self._unacked_starts:
+            if time.monotonic() >= deadline:
+                self._unacked_starts.pop(seq, None)
+                raise P2PError(f"{self.sn} did not acknowledge command {cmd_id}")
+            await asyncio.sleep(LIVE_START_RETRANSMIT_S)
+            if seq in self._unacked_starts:
+                self._send_data(self._unacked_starts[seq][0])
+        try:
+            await asyncio.wait_for(self._reply.wait(), 3.0)
+        except asyncio.TimeoutError:
+            return None
+        return self._reply_code
 
     def _send_stop(self) -> None:
         body = struct.pack("<I", self.channel)

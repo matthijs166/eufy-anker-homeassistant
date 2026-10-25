@@ -63,7 +63,6 @@ def _save_cached_auth(auth: dict) -> None:
         cache_file.write("\n")
 
 pytestmark = [
-    pytest.mark.integration,
     pytest.mark.skipif(not (EMAIL and PASSWORD), reason="EUFY_EMAIL / EUFY_PASSWORD not set"),
 ]
 
@@ -146,7 +145,6 @@ async def test_toggle_privacy_mode():
         finally:
             await api.set_privacy(device, original == "1")
 
-
 @pytest.mark.asyncio
 async def test_night_vision_modes():
     async with ClientSession() as session:
@@ -177,8 +175,7 @@ async def test_night_vision_modes():
                 actual = await read_value()
                 assert actual == str(mode), f"night vision 1277: expected {mode}, got {actual}"
         finally:
-            # await api.set_night_vision(device, int(original))
-            print(f"Restoring original night vision mode: {original}")
+            await api.set_night_vision(device, int(original))
 
 
 @pytest.mark.asyncio
