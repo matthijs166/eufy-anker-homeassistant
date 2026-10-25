@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import logging
+
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, OptionsFlow
 from homeassistant.helpers import config_validation as cv
@@ -10,6 +12,10 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import EufyApi, EufyAuthError, EufyCaptchaRequired, EufyError, EufyTwoFactorRequired
 from .const import CONF_AUTH, CONF_CAMERAS, CONF_EMAIL, CONF_PASSWORD, DOMAIN
+
+_LOGGER = logging.getLogger(__name__)
+
+CONF_DEBUG = "debug"
 
 
 async def _camera_options(api: EufyApi) -> dict[str, str]:
@@ -28,6 +34,7 @@ class EufyConfigFlow(ConfigFlow, domain=DOMAIN):
         self._captcha_id = ""
         self._captcha_image = ""
         self._options: dict[str, str] = {}
+        self._error_detail = ""
 
     @staticmethod
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
@@ -43,9 +50,12 @@ class EufyConfigFlow(ConfigFlow, domain=DOMAIN):
             return await self.async_step_captcha()
         except EufyTwoFactorRequired:
             return await self.async_step_2fa()
-        except EufyAuthError:
+        except EufyAuthError as err:
+            self._error_detail = str(err)
             errors["base"] = "invalid_auth"
-        except EufyError:
+        except EufyError as err:
+            _LOGGER.error("Eufy login failed: %s", err, exc_info=self._api.debug)
+            self._error_detail = str(err)
             errors["base"] = "cannot_connect"
         else:
             return await self.async_step_cameras()
@@ -53,16 +63,26 @@ class EufyConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
         errors: dict[str, str] = {}
+        self._error_detail = ""
         if user_input:
-            self._creds = user_input
+            self._creds = {k: v for k, v in user_input.items() if k != CONF_DEBUG}
             await self.async_set_unique_id(user_input[CONF_EMAIL].lower())
             self._abort_if_unique_id_configured()
-            self._api = EufyApi(async_get_clientsession(self.hass), user_input[CONF_EMAIL], user_input[CONF_PASSWORD])
+            self._api = EufyApi(async_get_clientsession(self.hass), user_input[CONF_EMAIL], user_input[CONF_PASSWORD],
+                debug=user_input.get(CONF_DEBUG, False),
+            )
             if result := await self._try_login("user", errors):
                 return result
         return self.async_show_form(
             step_id="user",
-            data_schema=vol.Schema({vol.Required(CONF_EMAIL): str, vol.Required(CONF_PASSWORD): str}),
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_EMAIL): str,
+                    vol.Required(CONF_PASSWORD): str,
+                    vol.Optional(CONF_DEBUG, default=False): bool,
+                }
+            ),
+            description_placeholders={"error": self._error_detail},
             errors=errors,
         )
 
@@ -76,7 +96,10 @@ class EufyConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="captcha",
             data_schema=vol.Schema({vol.Required("captcha"): str}),
-            description_placeholders={"image": f"![captcha]({self._captcha_image})"},
+            description_placeholders={
+                "image": f"![captcha]({self._captcha_image})",
+                "error": self._error_detail,
+            },
             errors=errors,
         )
 
@@ -88,6 +111,7 @@ class EufyConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="2fa",
             data_schema=vol.Schema({vol.Required("code"): str}),
+            description_placeholders={"error": self._error_detail},
             errors=errors,
         )
 
