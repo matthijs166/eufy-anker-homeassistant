@@ -22,12 +22,32 @@ _pkg.__path__ = [str(_PKG_DIR)]
 sys.modules["eufy_anker_ha"] = _pkg
 api_mod = importlib.import_module("eufy_anker_ha.api")
 crypto = importlib.import_module("eufy_anker_ha.crypto")
+p2p = importlib.import_module("eufy_anker_ha.p2p")
 
 
 def _pub_hex(key):
     return key.public_key().public_bytes(
         serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint
     ).hex()
+
+
+@pytest.mark.parametrize(
+    ("codec_id", "codec"),
+    [(0, "aac-lc"), (2, "g711a"), (7, "aac-eld")],
+)
+def test_decode_audio_strips_header_and_identifies_codec(codec_id, codec):
+    frame = bytearray(16) + b"audio"
+    frame[p2p.AUDIO_TYPE_OFFSET] = codec_id
+
+    assert p2p.decode_audio(frame) == (codec, b"audio")
+
+
+def test_decode_audio_rejects_unknown_or_empty_frames():
+    unknown = bytearray(16) + b"audio"
+    unknown[p2p.AUDIO_TYPE_OFFSET] = 99
+
+    assert p2p.decode_audio(unknown) is None
+    assert p2p.decode_audio(bytes(16)) is None
 
 
 class FakeCloud:

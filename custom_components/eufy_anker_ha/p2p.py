@@ -56,6 +56,10 @@ CMD_START_LIVE = 1000
 CMD_STOP_MEDIA = 1004
 CMD_KEEPALIVE = 1139
 CMD_VIDEO_FRAME = 1300
+CMD_AUDIO_FRAME = 1301
+AUDIO_HEADER_LEN = 16
+AUDIO_TYPE_OFFSET = 5
+_AUDIO_CODECS = {0: "aac-lc", 2: "g711a", 7: "aac-eld"}
 STATION_CHANNEL = 255
 FRAME_TYPE_L1 = 11
 
@@ -173,6 +177,16 @@ def has_idr(data: bytes, codec: str) -> bool:
     return False
 
 
+def decode_audio(payload: bytes) -> tuple[str, bytes] | None:
+    """Return the codec and elementary audio data from a P2P audio frame."""
+    if len(payload) <= AUDIO_HEADER_LEN:
+        return None
+    codec = _AUDIO_CODECS.get(payload[AUDIO_TYPE_OFFSET])
+    if codec is None:
+        return None
+    return codec, payload[AUDIO_HEADER_LEN:]
+
+
 def _ecdh_session_key(envelope: bytes, ecc_private_hex: str) -> bytes:
     """Open the camera's ECIES envelope (device pubkey + iv + ciphertext + hmac) into the 16-byte session key."""
     pub_len = 65 if envelope[:1] == b"\x04" else 33
@@ -246,6 +260,7 @@ class P2PSession:
         self._reorder_timers: dict[int, asyncio.TimerHandle] = {}
         self._pending: dict[int, dict[str, Any]] = {}
         self._frame_cb: Callable[[int, int, bytes], None] | None = None
+        self._audio_cb: Callable[[str, bytes], None] | None = None
         self._reply = asyncio.Event()
         self._reply_code: int | None = None
         self._key_blob = b""
@@ -470,6 +485,10 @@ class P2PSession:
                 self._gateway.set()
         elif cmd == CMD_VIDEO_FRAME and self._frame_cb:
             self._frame_cb(cmd, sign, payload)
+        elif cmd == CMD_AUDIO_FRAME and self._audio_cb:
+            audio = decode_audio(payload)
+            if audio:
+                self._audio_cb(*audio)
         elif cmd in (CMD_CONTROL_PAYLOAD, CMD_SET_PAYLOAD):
             data = payload
             if sign > 0 and data and len(data) % 16 == 0:
@@ -669,8 +688,14 @@ class P2PSession:
                 last_keepalive = now
             await asyncio.sleep(0.05)
 
-    async def stream(self, on_video: Callable[[bytes], None], stop: asyncio.Event, first_frame_timeout: float = 15.0) -> None:
-        """Start live video and push each decrypted Annex-B access unit to on_video until stop is set."""
+    async def stream(
+        self,
+        on_video: Callable[[bytes], None],
+        stop: asyncio.Event,
+        first_frame_timeout: float = 15.0,
+        on_audio: Callable[[str, bytes], None] | None = None,
+    ) -> None:
+        """Push live video and audio frames to their callbacks until stop is set."""
         loop = asyncio.get_running_loop()
         seen = False
 
@@ -689,10 +714,12 @@ class P2PSession:
             return stop.is_set()
 
         self._frame_cb = on_frame
+        self._audio_cb = on_audio
         try:
             await self._live_loop(done, None, lambda: "")
         finally:
             self._frame_cb = None
+            self._audio_cb = None
             self._send_stop()
 
     async def close(self) -> None:
